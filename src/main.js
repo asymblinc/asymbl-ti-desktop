@@ -29,7 +29,7 @@ const openai = new OpenAI({
 // Define available models with their capabilities
 const MODELS = {
   // Primary models
-  PRIMARY: "anthropic/claude-3.7-sonnet",
+  PRIMARY: "~anthropic/claude-sonnet-latest",
   FALLBACKS: []
 };
 
