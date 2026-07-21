@@ -7,7 +7,10 @@
 const axios = require('axios');
 const authStore = require('./auth-store');
 
-const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-912609211955.us-east1.run.app';
+// Points at the asymbl-recall project (moved off talent-intelligence-493620
+// after docs/BLOCKERS.md #10's Cloud Run reachability issue turned out to be
+// organization-wide, not project-specific - see the GCP support ticket).
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-bz7wmytcsa-ue.a.run.app';
 
 /**
  * F9 (Spec B, Upload Paths): mint a Recall upload token via the control
