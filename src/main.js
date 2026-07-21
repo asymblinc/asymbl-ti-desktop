@@ -3,35 +3,9 @@ const path = require('node:path');
 const url = require('url');
 const fs = require('fs');
 const RecallAiSdk = require('@recallai/desktop-sdk');
-const axios = require('axios');
-const OpenAI = require('openai');
 const sdkLogger = require('./sdk-logger');
+const controlPlaneClient = require('./control-plane-client');
 require('dotenv').config();
-
-// Function to get the OpenRouter headers
-function getHeaderLines() {
-  return [
-    "HTTP-Referer: https://recall.ai", // Replace with your actual app's URL
-    "X-Title: Muesli AI Notetaker"
-  ];
-}
-
-// Initialize OpenAI client with OpenRouter as the base URL
-const openai = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_KEY,
-  defaultHeaders: {
-    "HTTP-Referer": "https://recall.ai",
-    "X-Title": "Muesli AI Notetaker"
-  }
-});
-
-// Define available models with their capabilities
-const MODELS = {
-  // Primary models
-  PRIMARY: "~anthropic/claude-sonnet-latest",
-  FALLBACKS: []
-};
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -316,26 +290,23 @@ const fileOperationManager = {
   }
 };
 
-// Create a desktop SDK upload token
+// Create a desktop SDK upload token via the control plane (F9). Previously
+// called a local Express server (deleted, src/server.js) that held the
+// Recall API key directly on the desktop.
+//
+// [UNVERIFIED] decisionToken is not wired from a capture-policy call yet
+// (F6 desktop-side integration - meeting detection -> GET capture-policy ->
+// this call - is not built). Passing null for now; control-plane-client
+// will fail closed with a clear "not signed in" error until F7 login exists
+// anyway, so this isn't hiding a working path.
 async function createDesktopSdkUpload() {
-  try {
-    const response = await axios.get("http://localhost:13373/start-recording", { timeout: 10000 });
-
-    if (response.data.status !== 'success') {
-      console.error("Failed to create upload token:", response.data.message);
-      return null;
-    } else {
-      console.log("Upload token created successfully:", response.data.upload_token);
-      return response.data;
-    }
-  } catch (error) {
-    console.error("Error creating upload token:", JSON.stringify(error.errors || error.message || error));
-    if (error.response) {
-      console.error("Response data:", error.response.data);
-      console.error("Response status:", error.response.status);
-    }
+  const result = await controlPlaneClient.createDesktopSdkUpload(null);
+  if (result.status !== 'success') {
+    console.error("Failed to create upload token:", result.message);
     return null;
   }
+  console.log("Upload token created successfully:", result.upload_token);
+  return result;
 }
 
 // Initialize the Recall.ai SDK
@@ -1441,149 +1412,18 @@ async function processTranscriptData(evt) {
 }
 
 // Function to generate AI summary from transcript with streaming support
-async function generateMeetingSummary(meeting, progressCallback = null) {
-  try {
-    if (!meeting.transcript || meeting.transcript.length === 0) {
-      console.log('No transcript available to summarize');
-      return 'No transcript available to summarize.';
-    }
-
-    console.log(`Generating AI summary for meeting: ${meeting.id}`);
-
-    // Format the transcript into a single text for the AI to process
-    const transcriptText = meeting.transcript.map(entry =>
-      `${entry.speaker}: ${entry.text}`
-    ).join('\n');
-
-    // Format detected participants if available
-    let participantsText = "";
-    if (meeting.participants && meeting.participants.length > 0) {
-      participantsText = "Detected participants:\n" + meeting.participants.map(p =>
-        `- ${p.name}${p.isHost ? ' (Host)' : ''}`
-      ).join('\n');
-    }
-
-    // Define a system prompt to guide the AI's response with a specific format
-    const systemMessage =
-      "You are an AI assistant that summarizes meeting transcripts. " +
-      "You MUST format your response using the following structure:\n\n" +
-      "# Participants\n" +
-      "- [List all participants mentioned in the transcript]\n\n" +
-      "# Summary\n" +
-      "- [Key discussion point 1]\n" +
-      "- [Key discussion point 2]\n" +
-      "- [Key decisions made]\n" +
-      "- [Include any important deadlines or dates mentioned]\n\n" +
-      "# Action Items\n" +
-      "- [Action item 1] - [Responsible person if mentioned]\n" +
-      "- [Action item 2] - [Responsible person if mentioned]\n" +
-      "- [Add any other action items discussed]\n\n" +
-      "Stick strictly to this format with these exact section headers. Keep each bullet point concise but informative.";
-
-    // Prepare the messages array for the API
-    const messages = [
-      { role: "system", content: systemMessage },
-      {
-        role: "user", content: `Summarize the following meeting transcript with the EXACT format specified in your instructions:
-${participantsText ? participantsText + "\n\n" : ""}
-Transcript:
-${transcriptText}`
-      }
-    ];
-
-    // If no progress callback provided, use the non-streaming version
-    if (!progressCallback) {
-      // Call the OpenAI API (via OpenRouter) for summarization (non-streaming)
-      const response = await openai.chat.completions.create({
-        model: MODELS.PRIMARY, // Use our primary model for a good balance of quality and speed
-        messages: messages,
-        max_tokens: 1000,
-        temperature: 0.7,
-        fallbacks: MODELS.FALLBACKS, // Use our defined fallback models
-        transform_to_openai: true, // Ensures consistent response format across models
-        route: "fallback" // Automatically use fallbacks if the primary model is unavailable
-      });
-
-      // Log which model was actually used
-      console.log(`AI summary generated successfully using model: ${response.model}`);
-
-      // Return the generated summary
-      return response.choices[0].message.content;
-    } else {
-      // Use streaming version and accumulate the response
-      let fullText = '';
-
-      // Create a streaming request
-      const stream = await openai.chat.completions.create({
-        model: MODELS.PRIMARY, // Use our primary model for a good balance of quality and speed
-        messages: messages,
-        max_tokens: 1000,
-        temperature: 0.7,
-        stream: true,
-        fallbacks: MODELS.FALLBACKS, // Use our defined fallback models
-        transform_to_openai: true, // Ensures consistent response format across models
-        route: "fallback" // Automatically use fallbacks if the primary model is unavailable
-      });
-
-      // Handle streaming events
-      return new Promise((resolve, reject) => {
-        // Process the stream
-        (async () => {
-          try {
-            // Log the model being used when first chunk arrives (if available)
-            let modelLogged = false;
-
-            for await (const chunk of stream) {
-              // Log the model on first chunk if available
-              if (!modelLogged && chunk.model) {
-                console.log(`Streaming with model: ${chunk.model}`);
-                modelLogged = true;
-              }
-
-              // Extract the text content from the chunk
-              const content = chunk.choices[0]?.delta?.content || '';
-
-              if (content) {
-                // Add the new text chunk to our accumulated text
-                fullText += content;
-
-                // Log each token for debugging (less verbose)
-                if (content.length < 50) {
-                  console.log(`Received token: "${content}"`);
-                } else {
-                  console.log(`Received content of length: ${content.length}`);
-                }
-
-                // Call the progress callback immediately with each token
-                if (progressCallback) {
-                  progressCallback(fullText);
-                }
-              }
-            }
-
-            console.log('AI summary streaming completed');
-            resolve(fullText);
-          } catch (error) {
-            console.error('Stream error:', error);
-            reject(error);
-          }
-        })();
-      });
-    }
-  } catch (error) {
-    console.error('Error generating meeting summary:', error);
-
-    // Check if it's an OpenRouter/OpenAI specific error
-    if (error.status) {
-      return `Error generating summary: API returned status ${error.status}: ${error.message}`;
-    } else if (error.response) {
-      // Handle errors with a response object
-      return `Error generating summary: ${error.response.status} - ${error.response.data?.error?.message || error.message}`;
-    } else {
-      // Default error handling
-      return `Error generating summary: ${error.message}`;
-    }
+// Local AI summarization (this function used to call OpenAI/OpenRouter/Claude
+// directly from the desktop process) is removed per the TI Recall handoff:
+// "NEVER: call LLMs from the desktop app." Structured signal extraction now
+// happens server-side (Temporal C1) and lands on the Salesforce Job Applicant
+// timeline instead. Signature kept so the existing IPC handlers/renderer
+// calls degrade to a clear message rather than crashing.
+async function generateMeetingSummary(_meeting, progressCallback = null) {
+  const message = 'AI summary generation was removed from the desktop app. Interview signal extraction now happens server-side and appears on the Salesforce Job Applicant timeline.';
+  if (progressCallback) {
+    progressCallback(message);
   }
+  return message;
 }
 
 // Function to update a note with recording information when recording ends
