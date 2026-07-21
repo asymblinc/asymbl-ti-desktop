@@ -1,3 +1,7 @@
+require('dotenv').config();
+// F10-R10: must run before other requires so startup crashes are captured too.
+require('./crash-reporter').initCrashReporter();
+
 const { app, BrowserWindow, ipcMain, protocol, Notification } = require('electron');
 const path = require('node:path');
 const url = require('url');
@@ -11,7 +15,6 @@ const capturePolicyClient = require('./capture-policy-client');
 const notesSync = require('./notes-sync');
 const updater = require('./updater');
 const telemetry = require('./telemetry');
-require('dotenv').config();
 
 let cachedTenantId = null; // set once fetchBootstrap succeeds (Spec B F10-R9's telemetry events carry tenant_id)
 
@@ -476,15 +479,23 @@ function initSDK() {
     // Get a user-friendly platform name, or use the raw platform name if not in our map
     const platformName = platformNames[evt.window.platform] || evt.window.platform;
 
-    // Send a notification
+    // Granola-style prompt: click the notification (or its Record action,
+    // macOS-only - Electron doesn't render notification action buttons on
+    // Windows/Linux, so the click-anywhere handler below is the reliable
+    // cross-platform path either way) to open the app and start recording
+    // immediately, same as clicking the "Record Meeting" button by hand.
     let notification = new Notification({
-      title: `${platformName} Meeting Detected`,
-      body: platformName
+      title: 'Start recording this meeting?',
+      body: `${platformName} meeting detected — click to record`,
+      actions: [{ type: 'button', text: 'Record' }]
     });
 
-    // Handle notification click
     notification.on('click', () => {
       console.log("Notification clicked for platform:", platformName);
+      joinDetectedMeeting();
+    });
+    notification.on('action', () => {
+      console.log("Notification 'Record' action clicked for platform:", platformName);
       joinDetectedMeeting();
     });
 
@@ -1362,6 +1373,15 @@ async function createMeetingNoteAndRecord(platformName) {
     return id;
   } catch (error) {
     console.error('Error creating meeting note:', error);
+    // Real bug found via a live test run: if RecallAiSdk.startRecording
+    // fails in both the primary and no-token-fallback branches above (e.g.
+    // "Failed to parse recording config" when there's no working Recall API
+    // key), this outer catch used to return undefined even though the
+    // meeting note itself was already created and saved to disk a few lines
+    // earlier - the caller (joinDetectedMeeting) then reported a successful
+    // join with no way to find the note it just made. The note exists
+    // either way; recording failing to start shouldn't erase that.
+    return typeof id !== 'undefined' ? id : null;
   }
 }
 
