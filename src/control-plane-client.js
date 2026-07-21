@@ -95,4 +95,27 @@ async function finalizeDesktopSession(sessionId, { endedAt, finalSeconds, transc
   }
 }
 
-module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, CONTROL_PLANE_URL };
+/**
+ * Spec B F10-R11: "first call after login," used here just to read
+ * tenant.features.telemetry_enabled before initializing PostHog. Other
+ * bootstrap fields (runtime URLs, license_status) aren't consumed yet -
+ * every other client in this file still hardcodes its own route, a
+ * pre-existing simplification from before this endpoint existed.
+ */
+async function fetchBootstrap() {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) {
+    return { status: 'error', message: 'Not signed in' };
+  }
+  try {
+    const response = await axios.get(`${CONTROL_PLANE_URL}/api/ti/desktop/bootstrap`, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'X-Asymbl-Desktop-Version': require('../package.json').version },
+      timeout: 10000,
+    });
+    return { status: 'success', bootstrap: response.data };
+  } catch (error) {
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, fetchBootstrap, CONTROL_PLANE_URL };

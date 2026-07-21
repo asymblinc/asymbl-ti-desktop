@@ -9,7 +9,11 @@ const authStore = require('./auth-store');
 const desktopAuth = require('./auth');
 const capturePolicyClient = require('./capture-policy-client');
 const notesSync = require('./notes-sync');
+const updater = require('./updater');
+const telemetry = require('./telemetry');
 require('dotenv').config();
+
+let cachedTenantId = null; // set once fetchBootstrap succeeds (Spec B F10-R9's telemetry events carry tenant_id)
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -123,7 +127,17 @@ app.whenReady().then(() => {
     controlPlaneClient.refreshSession().then((result) => {
       if (result.status !== 'success') {
         console.error('Session refresh failed:', result.message);
+        return;
       }
+      // Spec B F10-R11: telemetry_enabled is a bootstrap field, not baked in
+      // at build time like the API key - only known once signed in.
+      controlPlaneClient.fetchBootstrap().then((bootstrapResult) => {
+        if (bootstrapResult.status !== 'success') {
+          return;
+        }
+        cachedTenantId = bootstrapResult.bootstrap.user.tenant_id;
+        telemetry.initTelemetry(process.env.POSTHOG_API_KEY, bootstrapResult.bootstrap.tenant.features.telemetry_enabled);
+      });
     });
   };
   runSessionRefresh();
@@ -158,6 +172,7 @@ app.whenReady().then(() => {
   initSDK();
 
   createWindow();
+  updater.initUpdater(mainWindow);
 
   // When the window is ready, send the initial meeting detection status
   mainWindow.webContents.on('did-finish-load', () => {
@@ -181,6 +196,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  telemetry.shutdownTelemetry().catch(() => {});
 });
 
 // In this file you can include the rest of your app's specific main process
@@ -398,9 +417,10 @@ async function finalizeDesktopRecordingSession(windowId) {
     console.error('Error reading transcript for session finalize:', error.message);
   }
 
+  const durationS = tracked.recordingStartedAt ? Math.round((Date.now() - tracked.recordingStartedAt) / 1000) : 0;
   const result = await controlPlaneClient.finalizeDesktopSession(tracked.sessionId, {
     endedAt: new Date().toISOString(),
-    finalSeconds: tracked.recordingStartedAt ? Math.round((Date.now() - tracked.recordingStartedAt) / 1000) : 0,
+    finalSeconds: durationS,
     transcriptArtifacts: utterances.length ? [{ type: 'utterances', url_or_payload: utterances }] : []
   });
   if (result.status !== 'success') {
@@ -408,6 +428,14 @@ async function finalizeDesktopRecordingSession(windowId) {
   } else {
     console.log('Finalized desktop session:', tracked.sessionId, result.result);
   }
+
+  // F10-R9: PII-free usage event - exactly the allowed field set, nothing else.
+  telemetry.captureEvent('desktop_recording_finalized', cachedTenantId, {
+    session_id: tracked.sessionId,
+    decision: tracked.policyDecision,
+    platform: tracked.platformName,
+    duration_s: durationS,
+  });
 }
 
 // Initialize the Recall.ai SDK
@@ -663,6 +691,7 @@ function initSDK() {
     if (noteId) {
       activeRecordings.addRecording(window.id, noteId, window.platform || 'unknown');
     }
+    updater.setRecordingActive(true); // F10-R4: never force-restart mid-recording
   });
 
   RecallAiSdk.addEventListener('recording-ended', async evt => {
@@ -673,6 +702,7 @@ function initSDK() {
 
     console.log("Recording stopped for window:", window.id);
     activeRecordings.removeRecording(window.id);
+    updater.setRecordingActive(false);
   });
 
   // Listen for real-time transcript events
@@ -1232,9 +1262,11 @@ async function createMeetingNoteAndRecord(platformName) {
     let decisionToken = null;
     let interviewId = null;
     let blockReason = null;
+    let policyDecision = null; // F10-R9 telemetry field - which arbitration decision this recording ran under
 
     if (policyCheck.status === 'success') {
       const policy = policyCheck.policy;
+      policyDecision = policy.decision;
       if (policy.decision === 'NONE') {
         blockReason = policy.consent?.consent_required && !policy.consent?.consent_obtained
           ? 'Consent required for this meeting has not been obtained.'
@@ -1275,6 +1307,7 @@ async function createMeetingNoteAndRecord(platformName) {
       if (uploadData && uploadData.session && uploadData.session.session_id && global.activeMeetingIds?.[detectedMeeting.window.id]) {
         global.activeMeetingIds[detectedMeeting.window.id].sessionId = uploadData.session.session_id;
         global.activeMeetingIds[detectedMeeting.window.id].recordingStartedAt = Date.now();
+        global.activeMeetingIds[detectedMeeting.window.id].policyDecision = policyDecision;
       }
 
       // Spec B F8: persist notes_session_id on the meeting record itself
