@@ -7,6 +7,17 @@
   --text-primary: #000;
   --text-secondary: #666;
   --sidebar-width: 320px;
+  /* Brand QA: CLAUDE-CODE-HANDOFF.md §12 ("2026 Asymbl": ink navy, blue
+     primary, red record semantics) - confirmed against actual hex codes in
+     the design canvas (TI Recall/Recall by Asymbl.html), not the general
+     Asymbl company style guide (different palette, see docs/BLOCKERS.md #6).
+     Only the two load-bearing brand rules (primary CTA blue, record-state
+     red) are wired below - this app's many other inherited muesli-template
+     colors (generic grays/blues throughout index.css) are NOT re-themed in
+     this pass, flagged as a larger follow-up rather than guessed at. */
+  --brand-ink-navy: #191d47;
+  --brand-blue: #038ff8;
+  --brand-record-red: #ed2929;
 }
 
 * {
@@ -130,7 +141,7 @@ body {
 }
 
 .join-meeting-btn {
-  background-color: #007aff;
+  background-color: var(--brand-blue);
   color: white;
 }
 
@@ -531,11 +542,11 @@ body {
 
 .record-btn.recording {
   color: #fff;
-  background-color: #ff3b30;
+  background-color: var(--brand-record-red);
 }
 
 .record-btn.recording:hover {
-  background-color: #d93129;
+  background-color: color-mix(in srgb, var(--brand-record-red) 85%, black);
 }
 
 .generate-btn {
