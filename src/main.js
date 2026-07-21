@@ -8,6 +8,7 @@ const controlPlaneClient = require('./control-plane-client');
 const authStore = require('./auth-store');
 const desktopAuth = require('./auth');
 const capturePolicyClient = require('./capture-policy-client');
+const notesSync = require('./notes-sync');
 require('dotenv').config();
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -727,6 +728,20 @@ ipcMain.handle('saveMeetingsData', async (event, data) => {
   try {
     // Use the file operation manager to safely write the file
     await fileOperationManager.writeData(data);
+
+    // Spec B F8: fire-and-forget sync of every meeting with a
+    // notesSessionId, on every save. Not diffed against the last-synced
+    // content (this handler gets the whole meetings list, not just what
+    // changed) - the server's append is idempotent by block_id, so a
+    // redundant re-sync of unchanged notes is harmless, just an extra call.
+    for (const meeting of data.pastMeetings || []) {
+      if (meeting.notesSessionId && meeting.content) {
+        notesSync.syncNote(meeting.id, meeting.notesSessionId, meeting.content).catch((error) => {
+          console.error('Note sync failed for', meeting.id, ':', error.message);
+        });
+      }
+    }
+
     return { success: true };
   } catch (error) {
     console.error('Failed to save meetings data:', error);
@@ -1260,6 +1275,14 @@ async function createMeetingNoteAndRecord(platformName) {
       if (uploadData && uploadData.session && uploadData.session.session_id && global.activeMeetingIds?.[detectedMeeting.window.id]) {
         global.activeMeetingIds[detectedMeeting.window.id].sessionId = uploadData.session.session_id;
         global.activeMeetingIds[detectedMeeting.window.id].recordingStartedAt = Date.now();
+      }
+
+      // Spec B F8: persist notes_session_id on the meeting record itself
+      // (not just in-memory) so every future note save can sync, not just
+      // ones made while this recording is still active.
+      if (uploadData && uploadData.session && uploadData.session.notes_session_id) {
+        newMeeting.notesSessionId = uploadData.session.notes_session_id;
+        await fileOperationManager.writeData(meetingsData);
       }
 
       if (!uploadData || !uploadData.upload_token) {
