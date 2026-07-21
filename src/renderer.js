@@ -18,6 +18,22 @@ const meetingsData = {
 const upcomingMeetings = [];
 const pastMeetings = [];
 
+// Spec B F2: toggles the header's sign-in button vs. avatar based on
+// whether we've ever completed SF login (getAuthStatus checks in-memory
+// access token OR the persisted refresh token, not full session validity -
+// an expired/revoked refresh token still shows "signed in" here until the
+// next real API call fails).
+async function refreshAuthUi() {
+  const signInBtn = document.getElementById('signInBtn');
+  const userAvatar = document.getElementById('userAvatar');
+  if (!signInBtn || !userAvatar) {
+    return;
+  }
+  const { signedIn } = await window.electronAPI.getAuthStatus();
+  signInBtn.style.display = signedIn ? 'none' : 'block';
+  userAvatar.style.display = signedIn ? 'flex' : 'none';
+}
+
 // Group past meetings by date
 let pastMeetingsByDate = {};
 
@@ -1241,6 +1257,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Initially show home view
   showHomeView();
+
+  // Spec B F2: SF SSO login state
+  await refreshAuthUi();
+  const signInBtn = document.getElementById('signInBtn');
+  if (signInBtn) {
+    signInBtn.addEventListener('click', async () => {
+      signInBtn.disabled = true;
+      signInBtn.textContent = 'Signing in...';
+      const result = await window.electronAPI.startLogin();
+      if (result.status !== 'success') {
+        console.error('Sign-in failed:', result.error);
+        signInBtn.textContent = 'Sign in with Salesforce';
+      }
+      signInBtn.disabled = false;
+      await refreshAuthUi();
+    });
+  }
 
   // Listen for meeting detection status updates
   window.electronAPI.onMeetingDetectionStatus((data) => {

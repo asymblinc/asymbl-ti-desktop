@@ -5,12 +5,44 @@ const fs = require('fs');
 const RecallAiSdk = require('@recallai/desktop-sdk');
 const sdkLogger = require('./sdk-logger');
 const controlPlaneClient = require('./control-plane-client');
+const authStore = require('./auth-store');
+const desktopAuth = require('./auth');
 require('dotenv').config();
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
   app.quit();
 }
+
+// Spec B F2: SF SSO login redirects back via a custom protocol
+// (asymbl-recall://auth-callback). On Windows/Linux that launch is a new OS
+// process; the single-instance lock hands its argv to the already-running
+// instance instead of opening a second window.
+desktopAuth.registerProtocolHandler();
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const callbackArg = argv.find((arg) => arg.startsWith(`${desktopAuth.PROTOCOL}://`));
+    if (callbackArg) {
+      desktopAuth.handleCallbackUrl(callbackArg);
+    }
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+}
+
+// macOS delivers the custom-protocol URL via 'open-url', not process.argv.
+app.on('open-url', (event, receivedUrl) => {
+  event.preventDefault();
+  desktopAuth.handleCallbackUrl(receivedUrl);
+});
 
 // Store detected meeting information
 let detectedMeeting = null;
@@ -69,6 +101,14 @@ app.whenReady().then(() => {
   console.log("Registering IPC handlers...");
   // Log all registered IPC handlers
   console.log("IPC handlers:", Object.keys(ipcMain._invokeHandlers));
+
+  // Spec B F2: SF SSO login
+  ipcMain.handle('startLogin', async () => {
+    return desktopAuth.startLogin();
+  });
+  ipcMain.handle('getAuthStatus', async () => {
+    return { signedIn: !!authStore.getAccessToken() || !!authStore.loadPersistedRefreshToken() };
+  });
 
   // Set up SDK logger IPC handlers
   ipcMain.on('sdk-log', (event, logEntry) => {
