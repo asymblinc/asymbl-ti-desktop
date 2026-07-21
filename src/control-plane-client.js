@@ -41,4 +41,34 @@ async function createDesktopSdkUpload(decisionToken, interviewId = null) {
   }
 }
 
-module.exports = { createDesktopSdkUpload, CONTROL_PLANE_URL };
+/**
+ * Spec B F3: token refresh + heartbeat. F7-R2's access token is a 15-min
+ * TTL, so this needs to run periodically (see main.js's setInterval) as long
+ * as a refresh token exists - not just once at startup.
+ */
+async function refreshSession() {
+  const refreshToken = authStore.loadPersistedRefreshToken();
+  if (!refreshToken) {
+    return { status: 'error', message: 'No persisted refresh token' };
+  }
+
+  try {
+    const response = await axios.post(
+      `${CONTROL_PLANE_URL}/auth/refresh`,
+      { refresh_token: refreshToken },
+      { timeout: 10000 }
+    );
+    authStore.setTokens({ access_token: response.data.access_token, refresh_token: response.data.refresh_token });
+    return { status: 'success' };
+  } catch (error) {
+    // F13-R5/F7-R6: a 401 here can mean an inactive license or a revoked
+    // token family - either way the session is dead, so clear local state
+    // rather than silently keep offering a stale button.
+    if (error.response?.status === 401) {
+      authStore.clearTokens();
+    }
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+module.exports = { createDesktopSdkUpload, refreshSession, CONTROL_PLANE_URL };

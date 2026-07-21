@@ -7,6 +7,7 @@ const sdkLogger = require('./sdk-logger');
 const controlPlaneClient = require('./control-plane-client');
 const authStore = require('./auth-store');
 const desktopAuth = require('./auth');
+const capturePolicyClient = require('./capture-policy-client');
 require('dotenv').config();
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -109,6 +110,23 @@ app.whenReady().then(() => {
   ipcMain.handle('getAuthStatus', async () => {
     return { signedIn: !!authStore.getAccessToken() || !!authStore.loadPersistedRefreshToken() };
   });
+
+  // Spec B F3: token refresh + heartbeat. Access tokens are a 15-min TTL
+  // (F7-R2) - refresh well before that so a call mid-meeting never hits an
+  // expired token. Also runs once at startup so a persisted refresh token
+  // from a previous session becomes a live access token again immediately.
+  const runSessionRefresh = () => {
+    if (!authStore.loadPersistedRefreshToken()) {
+      return;
+    }
+    controlPlaneClient.refreshSession().then((result) => {
+      if (result.status !== 'success') {
+        console.error('Session refresh failed:', result.message);
+      }
+    });
+  };
+  runSessionRefresh();
+  setInterval(runSessionRefresh, 10 * 60 * 1000);
 
   // Set up SDK logger IPC handlers
   ipcMain.on('sdk-log', (event, logEntry) => {
@@ -334,13 +352,12 @@ const fileOperationManager = {
 // called a local Express server (deleted, src/server.js) that held the
 // Recall API key directly on the desktop.
 //
-// [UNVERIFIED] decisionToken is not wired from a capture-policy call yet
-// (F6 desktop-side integration - meeting detection -> GET capture-policy ->
-// this call - is not built). Passing null for now; control-plane-client
-// will fail closed with a clear "not signed in" error until F7 login exists
-// anyway, so this isn't hiding a working path.
-async function createDesktopSdkUpload() {
-  const result = await controlPlaneClient.createDesktopSdkUpload(null);
+// decisionToken/interviewId come from the F5 capture-policy check
+// (createMeetingNoteAndRecord) when one was run; callers with no detected
+// meeting (post-recording upload refresh, manual in-person recording) pass
+// nothing, same as before this was wired up.
+async function createDesktopSdkUpload(decisionToken = null, interviewId = null) {
+  const result = await controlPlaneClient.createDesktopSdkUpload(decisionToken, interviewId);
   if (result.status !== 'success') {
     console.error("Failed to create upload token:", result.message);
     return null;
@@ -1146,12 +1163,53 @@ async function createMeetingNoteAndRecord(platformName) {
       console.error('Error verifying saved data:', verifyError);
     }
 
+    // Spec B F5: meeting detected -> capture policy -> consent, before any
+    // recording starts. meeting_url is only reliably known from
+    // meeting-updated (see the comment on that listener above), so this can
+    // legitimately come back with no policy match yet - that's not treated
+    // as a hard block, see the fail-open note below.
+    const policyCheck = await capturePolicyClient.checkCapturePolicy(detectedMeeting.window.url || null);
+    let decisionToken = null;
+    let interviewId = null;
+    let blockReason = null;
+
+    if (policyCheck.status === 'success') {
+      const policy = policyCheck.policy;
+      if (policy.decision === 'NONE') {
+        blockReason = policy.consent?.consent_required && !policy.consent?.consent_obtained
+          ? 'Consent required for this meeting has not been obtained.'
+          : 'Capture is not permitted for this meeting (Bot_Capture_Mode__c=None or no policy match).';
+      } else if (policy.decision === 'BOT_ONLY') {
+        blockReason = 'A Recall bot is already the authoritative capture for this meeting - desktop recording skipped.';
+      } else {
+        decisionToken = policy.decision_token;
+        interviewId = policy.interview_id;
+      }
+    } else {
+      // [UNVERIFIED default] fails OPEN to unmanaged desktop-only recording
+      // rather than blocking every meeting outright - capture-policy can't
+      // be checked at all yet in most real runs (F7-R11 login blocked,
+      // meeting_url often not populated this early). Logged, not silent.
+      console.warn('Capture policy check unavailable, recording without a policy decision:', policyCheck.message);
+    }
+
+    if (blockReason) {
+      console.log('Recording blocked by capture policy:', blockReason);
+      try {
+        newMeeting.content = `# ${meetingTitle}\nRecording not started: ${blockReason}`;
+        await fileOperationManager.writeData(meetingsData);
+      } catch (writeError) {
+        console.error('Error recording capture-policy block reason:', writeError);
+      }
+      return id;
+    }
+
     // Start recording with upload token
     console.log('Starting recording for meeting:', detectedMeeting.window.id);
 
     try {
       // Get upload token
-      const uploadData = await createDesktopSdkUpload();
+      const uploadData = await createDesktopSdkUpload(decisionToken, interviewId);
 
       if (!uploadData || !uploadData.upload_token) {
         console.error('Failed to get upload token. Recording without upload token.');
