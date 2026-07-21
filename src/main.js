@@ -366,6 +366,49 @@ async function createDesktopSdkUpload(decisionToken = null, interviewId = null) 
   return result;
 }
 
+// Spec B F6: finalize the session tracked for this window (see the
+// sessionId/recordingStartedAt stored in createMeetingNoteAndRecord). No-ops
+// if this window's recording never got a session_id - e.g. capture-policy
+// blocked it, or the upload-token call failed and recording proceeded
+// without one (see createMeetingNoteAndRecord's fallback path).
+async function finalizeDesktopRecordingSession(windowId) {
+  const tracked = global.activeMeetingIds?.[windowId];
+  if (!tracked?.sessionId) {
+    return;
+  }
+
+  // meeting.transcript entries only carry an absolute ISO timestamp (see
+  // processTranscriptData) - approximated to relative ms here since that's
+  // all extraction's merge/offset logic needs a coarse ordering for, not
+  // millisecond-accurate sync with the bot's transcript.
+  let utterances = [];
+  try {
+    const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
+    const meetingsData = JSON.parse(fileData);
+    const meeting = meetingsData.pastMeetings.find((m) => m.id === tracked.noteId);
+    const startedAt = tracked.recordingStartedAt || Date.now();
+    utterances = (meeting?.transcript || []).map((t) => ({
+      speaker: t.speaker,
+      start_ms: Math.max(0, new Date(t.timestamp).getTime() - startedAt),
+      end_ms: Math.max(0, new Date(t.timestamp).getTime() - startedAt),
+      text: t.text
+    }));
+  } catch (error) {
+    console.error('Error reading transcript for session finalize:', error.message);
+  }
+
+  const result = await controlPlaneClient.finalizeDesktopSession(tracked.sessionId, {
+    endedAt: new Date().toISOString(),
+    finalSeconds: tracked.recordingStartedAt ? Math.round((Date.now() - tracked.recordingStartedAt) / 1000) : 0,
+    transcriptArtifacts: utterances.length ? [{ type: 'utterances', url_or_payload: utterances }] : []
+  });
+  if (result.status !== 'success') {
+    console.error('Failed to finalize desktop session:', result.message);
+  } else {
+    console.log('Finalized desktop session:', tracked.sessionId, result.result);
+  }
+}
+
 // Initialize the Recall.ai SDK
 function initSDK() {
   console.log("Initializing Recall.ai SDK");
@@ -575,6 +618,8 @@ function initSDK() {
           await RecallAiSdk.uploadRecording({ windowId: evt.window.id });
         }
       }, 3000); // Wait 3 seconds before uploading
+
+      await finalizeDesktopRecordingSession(evt.window.id);
     } catch (error) {
       console.error("Error handling recording ended:", error);
     }
@@ -1210,6 +1255,12 @@ async function createMeetingNoteAndRecord(platformName) {
     try {
       // Get upload token
       const uploadData = await createDesktopSdkUpload(decisionToken, interviewId);
+
+      // Spec B F6: track the session so recording-ended can finalize it.
+      if (uploadData && uploadData.session && uploadData.session.session_id && global.activeMeetingIds?.[detectedMeeting.window.id]) {
+        global.activeMeetingIds[detectedMeeting.window.id].sessionId = uploadData.session.session_id;
+        global.activeMeetingIds[detectedMeeting.window.id].recordingStartedAt = Date.now();
+      }
 
       if (!uploadData || !uploadData.upload_token) {
         console.error('Failed to get upload token. Recording without upload token.');

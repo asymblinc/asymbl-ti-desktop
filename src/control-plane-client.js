@@ -71,4 +71,28 @@ async function refreshSession() {
   }
 }
 
-module.exports = { createDesktopSdkUpload, refreshSession, CONTROL_PLANE_URL };
+/**
+ * Spec B F6: finalize closes a desktop recording session server-side and is
+ * the only trigger for process_interview_capture on a desktop-only/
+ * supplement capture (a bot capture is triggered by bot.recording_done
+ * instead, in recall-webhook). Called once per recording, when it ends.
+ */
+async function finalizeDesktopSession(sessionId, { endedAt, finalSeconds, transcriptArtifacts }) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) {
+    return { status: 'error', message: 'Not signed in' };
+  }
+  try {
+    const response = await axios.post(
+      `${CONTROL_PLANE_URL}/api/ti/desktop/sessions/${sessionId}/finalize`,
+      { ended_at: endedAt, final_seconds: finalSeconds, transcript_artifacts: transcriptArtifacts },
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 10000 }
+    );
+    return { status: 'success', result: response.data };
+  } catch (error) {
+    console.error('Error finalizing desktop session:', error.message);
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, CONTROL_PLANE_URL };
