@@ -17,7 +17,7 @@ module.exports = {
         };
       }
     },
-    icon: './muesli',
+    icon: './asymbl',
     extendInfo: {
       NSUserNotificationAlertStyle: "alert",
     }
