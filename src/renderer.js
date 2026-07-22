@@ -18,6 +18,49 @@ const meetingsData = {
 const upcomingMeetings = [];
 const pastMeetings = [];
 
+// Shared toast helper - was duplicated inline at 2 call sites already
+// (joinMeetingBtn's "no active meeting"/"error joining" cases); extracted
+// here rather than adding a 3rd copy for the sign-in error case.
+function showToast(message) {
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => {
+      toast.remove();
+    }, 300);
+  }, 3000);
+}
+
+// Human-readable messages for sign-in failure reasons - the raw error/
+// locked_reason strings from the OAuth callback were only ever
+// console.error'd before, never shown to the user (real gap found during
+// end-to-end testing, 2026-07-22).
+const SIGN_IN_ERROR_MESSAGES = {
+  license_inactive: {
+    package_not_installed: 'Your Salesforce org doesn’t have Recall installed. Contact your admin.',
+    license_not_assigned: 'You don’t have a Recall license assigned yet. Contact your admin.',
+    license_revoked: 'Your Recall license has been revoked. Contact your admin.',
+  },
+  sf_oauth_failed: 'Salesforce sign-in failed. Please try again.',
+  timeout: 'Sign-in timed out. Please try again.',
+  missing_tokens: 'Salesforce sign-in failed. Please try again.',
+};
+
+function signInErrorMessage(error, lockedReason) {
+  const entry = SIGN_IN_ERROR_MESSAGES[error];
+  if (typeof entry === 'string') return entry;
+  if (entry && lockedReason && entry[lockedReason]) return entry[lockedReason];
+  return 'Sign-in failed. Please try again.';
+}
+
+// Tracks sign-in state for gating recording actions - Record In-person
+// Meeting/Record Meeting should not be usable while signed out (real gap
+// found during end-to-end testing: these worked regardless of auth state).
+window.isSignedIn = false;
+
 // Spec B F2: toggles the header's sign-in button vs. avatar based on
 // whether we've ever completed SF login (getAuthStatus checks in-memory
 // access token OR the persisted refresh token, not full session validity -
@@ -30,8 +73,19 @@ async function refreshAuthUi() {
     return;
   }
   const { signedIn, email } = await window.electronAPI.getAuthStatus();
+  window.isSignedIn = signedIn;
   signInBtn.style.display = signedIn ? 'none' : 'block';
   userAvatar.style.display = signedIn ? 'flex' : 'none';
+  const newNoteBtn = document.getElementById('newNoteBtn');
+  if (newNoteBtn) {
+    newNoteBtn.disabled = !signedIn;
+    newNoteBtn.title = signedIn ? '' : 'Sign in with Asymbl to record a meeting';
+  }
+  const joinMeetingBtn = document.getElementById('joinMeetingBtn');
+  if (joinMeetingBtn && !signedIn) {
+    joinMeetingBtn.disabled = true;
+    joinMeetingBtn.title = 'Sign in with Asymbl to record a meeting';
+  }
   // The JWT only carries email, no display name/photo (contracts/
   // asymbl-jwt-claims.yaml) - initials + a hover tooltip is the honest
   // version of "show who's signed in" available today; a real name/photo
@@ -1294,6 +1348,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const result = await window.electronAPI.startLogin();
       if (result.status !== 'success') {
         console.error('Sign-in failed:', result.error);
+        showToast(signInErrorMessage(result.error, result.lockedReason));
         signInBtn.textContent = 'Sign in with Asymbl';
       }
       signInBtn.disabled = false;
@@ -1315,9 +1370,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       const inHomeView = document.getElementById('homeView').style.display !== 'none';
 
       if (inHomeView) {
-        // Always show the button, but enable/disable based on meeting detection
+        // Always show the button, but enable/disable based on meeting
+        // detection AND sign-in state - recording while signed out was a
+        // real gap (worked regardless of auth, found during end-to-end
+        // testing 2026-07-22).
         joinMeetingBtn.style.display = 'block';
-        joinMeetingBtn.disabled = !data.detected;
+        joinMeetingBtn.disabled = !data.detected || !window.isSignedIn;
+        joinMeetingBtn.title = window.isSignedIn ? '' : 'Sign in with Asymbl to record a meeting';
         joinMeetingBtn.textContent = data.detected ? `Record ${data.platformName}` : 'Record meeting';
       }
     }

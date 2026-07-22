@@ -10,7 +10,7 @@ const authStore = require('./auth-store');
 // Temporary AWS App Runner bridge (docs/DECISIONS.md ADR-026) while GCP Cloud
 // Run's edge routing issue is open with Support (docs/BLOCKERS.md #10). Revert
 // to the *.run.app Cloud Run URL once that's resolved.
-const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://pf3mpvgzms.us-east-1.awsapprunner.com';
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-362541775773.us-east1.run.app';
 
 /**
  * F9 (Spec B, Upload Paths): mint a Recall upload token via the control

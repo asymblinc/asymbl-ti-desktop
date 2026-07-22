@@ -1810,6 +1810,16 @@ async function joinDetectedMeeting() {
   try {
     console.log("Join detected meeting called");
 
+    // Real gap found during end-to-end testing (2026-07-22): auto-join on
+    // meeting detection (line ~531 below) bypasses the renderer's button
+    // gating entirely - without this check, an unauthenticated user's app
+    // would silently attempt to record (and fail deep inside the SDK) the
+    // moment any meeting-like window was detected, with no clear message.
+    if (!authStore.getAccessToken() && !authStore.loadPersistedRefreshToken()) {
+      console.log("Not signed in - refusing to auto-join detected meeting");
+      return { success: false, error: "Sign in with Asymbl to record a meeting" };
+    }
+
     if (!detectedMeeting) {
       console.log("No detected meeting available");
       return { success: false, error: "No active meeting detected" };
