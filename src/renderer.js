@@ -485,6 +485,14 @@ function showEditorView(meetingId) {
   const dateObj = new Date(meeting.date);
   document.getElementById('noteDate').textContent = formatDate(dateObj);
 
+  // Reset the live transcript panel to hidden per note switch, and load
+  // whatever transcript this meeting already has (if the panel gets opened)
+  const liveTranscriptPanel = document.getElementById('liveTranscriptPanel');
+  if (liveTranscriptPanel) {
+    liveTranscriptPanel.classList.add('hidden');
+  }
+  renderLiveTranscript(meeting.transcript);
+
   // Get the editor element
   const editorElement = document.getElementById('simple-editor');
 
@@ -861,6 +869,42 @@ async function loadMeetingsDataFromFile() {
   }
 }
 
+// Real user-facing live transcript panel (task: give the transcript a
+// proper scrollable view instead of the 5-second toast or the dark
+// developer-only Debug panel). Same meeting.transcript data as
+// updateDebugTranscript, styled for the main app rather than the debug
+// panel's dark theme.
+function renderLiveTranscript(transcript) {
+  const content = document.getElementById('liveTranscriptContent');
+  if (!content) return;
+
+  const wasAtBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 5;
+
+  if (!transcript || transcript.length === 0) {
+    content.innerHTML = '<p class="live-transcript-placeholder">No transcript available yet</p>';
+    return;
+  }
+
+  // Transcript text is speech-recognition output, not user-typed markdown,
+  // but still not fully trusted - sanitize before it reaches innerHTML
+  // (same reasoning as the markdown preview's DOMPurify usage above).
+  content.innerHTML = DOMPurify.sanitize(transcript.map((entry) => {
+    const speakerClass = entry.speaker === 'You' ? 'speaker-you'
+      : entry.speaker === 'Them' ? 'speaker-them'
+      : 'speaker-unknown';
+    return `
+      <div class="live-transcript-entry">
+        <span class="live-transcript-speaker ${speakerClass}">${entry.speaker || 'Unknown Speaker'}:</span>
+        <span class="live-transcript-text">${entry.text}</span>
+      </div>
+    `;
+  }).join(''));
+
+  if (wasAtBottom) {
+    content.scrollTop = content.scrollHeight;
+  }
+}
+
 // Function to update the transcript section in the debug panel
 function updateDebugTranscript(transcript) {
   const transcriptContent = document.getElementById('transcriptContent');
@@ -895,9 +939,17 @@ function updateDebugTranscript(transcript) {
     const timestamp = new Date(entry.timestamp);
     const formattedTime = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+    // Distinct color per speaker (T19 spec, docs/PLAN-desktop-redesign.md) -
+    // "You" and "Them" are the only two real states on this path (T17:
+    // real diarization isn't available), "Unknown Speaker" is the neutral
+    // fallback when even is_host isn't present.
+    const speakerClass = entry.speaker === 'You' ? 'speaker-you'
+      : entry.speaker === 'Them' ? 'speaker-them'
+      : 'speaker-unknown';
+
     // Create HTML for this entry
     entryDiv.innerHTML = `
-      <div class="transcript-speaker">${entry.speaker || 'Unknown'}</div>
+      <div class="transcript-speaker ${speakerClass}">${entry.speaker || 'Unknown'}</div>
       <div class="transcript-text">${entry.text}</div>
       <div class="transcript-timestamp">${formattedTime}</div>
     `;
@@ -1423,6 +1475,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Live transcript panel toggle - one-time listeners, same pattern as
+  // the markdown preview toggle above.
+  const transcriptToggleBtn = document.getElementById('transcriptToggleBtn');
+  const closeLiveTranscriptBtn = document.getElementById('closeLiveTranscriptBtn');
+  const liveTranscriptPanelEl = document.getElementById('liveTranscriptPanel');
+  if (transcriptToggleBtn && liveTranscriptPanelEl) {
+    transcriptToggleBtn.addEventListener('click', () => {
+      liveTranscriptPanelEl.classList.toggle('hidden');
+    });
+  }
+  if (closeLiveTranscriptBtn && liveTranscriptPanelEl) {
+    closeLiveTranscriptBtn.addEventListener('click', () => {
+      liveTranscriptPanelEl.classList.add('hidden');
+    });
+  }
+
   // Initialize the SDK Logger
   sdkLogger.init();
 
@@ -1615,6 +1683,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           // Update the transcript area in the debug panel
           updateDebugTranscript(meeting.transcript);
+          renderLiveTranscript(meeting.transcript);
 
           // Show notification about new transcript if debug panel is closed
           const debugPanel = document.getElementById('debugPanel');
