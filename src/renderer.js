@@ -678,6 +678,30 @@ async function createNewMeeting() {
   return id;
 }
 
+// Populate the notes list container with meeting cards, optionally filtered by a
+// case-insensitive substring match against meeting.title
+function renderNotesInto(notesContainer, query) {
+  notesContainer.innerHTML = '';
+
+  // Add all meetings to the notes section (both upcoming and past)
+  const allMeetings = [...upcomingMeetings, ...pastMeetings];
+
+  // Sort by date, newest first
+  allMeetings.sort((a, b) => {
+    return new Date(b.date) - new Date(a.date);
+  });
+
+  const normalizedQuery = (query || '').trim().toLowerCase();
+
+  // Filter out calendar entries and add only document type meetings to the container
+  allMeetings
+    .filter(meeting => meeting.type !== 'calendar') // Skip calendar entries
+    .filter(meeting => !normalizedQuery || (meeting.title || '').toLowerCase().includes(normalizedQuery))
+    .forEach(meeting => {
+      notesContainer.appendChild(createMeetingCard(meeting));
+    });
+}
+
 // Function to render meetings to the page
 function renderMeetings() {
   // Clear previous content
@@ -696,20 +720,7 @@ function renderMeetings() {
   // Get the notes container
   const notesContainer = notesSection.querySelector('#notes-list');
 
-  // Add all meetings to the notes section (both upcoming and past)
-  const allMeetings = [...upcomingMeetings, ...pastMeetings];
-
-  // Sort by date, newest first
-  allMeetings.sort((a, b) => {
-    return new Date(b.date) - new Date(a.date);
-  });
-
-  // Filter out calendar entries and add only document type meetings to the container
-  allMeetings
-    .filter(meeting => meeting.type !== 'calendar') // Skip calendar entries
-    .forEach(meeting => {
-      notesContainer.appendChild(createMeetingCard(meeting));
-    });
+  renderNotesInto(notesContainer, '');
 }
 
 // Load meetings data from file
@@ -1696,9 +1707,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  const debouncedSearch = debounce((query) => {
+    const notesContainer = document.getElementById('notes-list');
+    if (notesContainer) {
+      renderNotesInto(notesContainer, query);
+    }
+  }, 150);
+
   document.querySelector('.search-input').addEventListener('input', (e) => {
-    console.log('Search query:', e.target.value);
-    // TODO: Implement search functionality
+    debouncedSearch(e.target.value);
   });
 
   // Add click event delegation for meeting cards and their actions
