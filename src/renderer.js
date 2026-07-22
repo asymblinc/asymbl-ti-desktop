@@ -97,7 +97,41 @@ async function refreshAuthUi() {
     userAvatar.removeAttribute('title');
     userAvatar.textContent = '';
   }
+  const userMenuEmail = document.getElementById('userMenuEmail');
+  if (userMenuEmail) {
+    userMenuEmail.textContent = signedIn && email ? email : '';
+  }
+  if (!signedIn) {
+    document.getElementById('userMenu')?.classList.remove('open');
+  }
 }
+
+// Click-to-toggle dropdown on the signed-in avatar (Sign out is the only
+// action today - a real settings entry point doesn't exist yet, so this
+// menu isn't wired to one; that's future work, not dropped scope).
+document.getElementById('userAvatar')?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  document.getElementById('userMenu')?.classList.toggle('open');
+});
+
+document.getElementById('signOutBtn')?.addEventListener('click', async () => {
+  document.getElementById('userMenu')?.classList.remove('open');
+  await window.electronAPI.signOut();
+  await refreshAuthUi();
+});
+
+document.addEventListener('click', (event) => {
+  const wrapper = document.getElementById('userMenuWrapper');
+  if (wrapper && !wrapper.contains(event.target)) {
+    document.getElementById('userMenu')?.classList.remove('open');
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    document.getElementById('userMenu')?.classList.remove('open');
+  }
+});
 
 // Pushed by the main process whenever tokens change (sign-in callback,
 // sign-out) - decoupled from whether a startLogin() promise is still

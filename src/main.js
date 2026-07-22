@@ -154,6 +154,9 @@ app.whenReady().then(() => {
     }
     return { signedIn, email };
   });
+  ipcMain.handle('signOut', async () => {
+    authStore.clearTokens();
+  });
 
   // Spec B F3: token refresh + heartbeat. Access tokens are a 15-min TTL
   // (F7-R2) - refresh well before that so a call mid-meeting never hits an

@@ -37,5 +37,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getActiveRecordingId: (noteId) => ipcRenderer.invoke('getActiveRecordingId', noteId),
   startLogin: () => ipcRenderer.invoke('startLogin'),
   getAuthStatus: () => ipcRenderer.invoke('getAuthStatus'),
+  signOut: () => ipcRenderer.invoke('signOut'),
   onAuthStatusChanged: (callback) => ipcRenderer.on('auth-status-changed', () => callback())
 });
