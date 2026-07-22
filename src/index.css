@@ -1,5 +1,10 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Caveat&display=swap');
+/* ponytail: network font import, not bundled locally - fine for now since
+   system-font fallbacks below are close enough visually; bundle locally
+   before a signed/offline build matters. */
+
 :root {
-  --primary-bg: #f9f9f9;
+  --primary-bg: #fafbfd;
   --card-bg: #fff;
   --light-purple: #f3e9ff;
   --light-green: #e8f5e9;
@@ -7,17 +12,53 @@
   --text-primary: #000;
   --text-secondary: #666;
   --sidebar-width: 320px;
-  /* Brand QA: CLAUDE-CODE-HANDOFF.md §12 ("2026 Asymbl": ink navy, blue
-     primary, red record semantics) - confirmed against actual hex codes in
-     the design canvas (TI Recall/Recall by Asymbl.html), not the general
-     Asymbl company style guide (different palette, see docs/BLOCKERS.md #6).
-     Only the two load-bearing brand rules (primary CTA blue, record-state
-     red) are wired below - this app's many other inherited muesli-template
-     colors (generic grays/blues throughout index.css) are NOT re-themed in
-     this pass, flagged as a larger follow-up rather than guessed at. */
+
+  /* Full 2026 Asymbl brand system, per CLAUDE-CODE-HANDOFF.md §12 - the
+     doc is explicit that ITS colors are authoritative, not the design
+     canvas's (canvas is layout/UX truth only, its own tokens.css palette
+     is a stand-in the doc calls out as "older warm/cream", to be
+     replaced). Structural tokens (radii/shadows/fonts) below are taken
+     from the canvas's tokens.css since those aren't a styling-truth
+     conflict - only the color values differ between the two sources. */
   --brand-ink-navy: #191d47;
+  --brand-white: #ffffff;
+  --brand-slate: #5b6070;
+  --brand-gray: #9aa0ae;
   --brand-blue: #038ff8;
+  --brand-purple: #8856ff;
+  --brand-pink: #ed489e;
+  --brand-green: #00cc6b;
+  --brand-yellow: #ffbb00;
+  --brand-orange: #f76b1b;
   --brand-record-red: #ed2929;
+  --brand-tint-blue: #d1eaff;
+  --brand-tint-blue-2: #b2deff;
+  --brand-tint-yellow: #fff8e5;
+  --brand-tint-orange: #fef1e6;
+  --brand-tint-green: #e5fff2;
+  --brand-tint-purple: #f2ebff;
+  --brand-tint-pink: #ffe8f4;
+  --brand-grad-blue-teal: linear-gradient(90deg, #008ff8, #00a9bb);
+  --brand-grad-blue-purple: linear-gradient(90deg, #008ff8, #8855ff);
+  --brand-grad-blue-pink: linear-gradient(90deg, #008ff8, #ed489e);
+  --brand-grad-indigo: linear-gradient(0deg, #191d47, #2c1169);
+
+  --brand-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --brand-font-mono: 'SF Mono', ui-monospace, Menlo, monospace;
+  --brand-font-hand: 'Caveat', 'Patrick Hand', cursive;
+  --brand-r-sm: 8px;
+  --brand-r-md: 12px;
+  --brand-r-lg: 16px;
+  --brand-shadow: 0 6px 18px rgba(25, 29, 71, 0.08), 0 2px 4px rgba(25, 29, 71, 0.04);
+  --brand-shadow-window: 0 24px 64px rgba(25, 29, 71, 0.22), 0 4px 12px rgba(25, 29, 71, 0.08), 0 0 0 1px rgba(25, 29, 71, 0.06);
+}
+
+/* Dark variant - ink-navy surfaces for the menu-bar tray popover only
+   (§12.2: "everything else is light-only for MVP"). */
+[data-theme="dark"] {
+  --brand-paper: #191d47;
+  --brand-paper-2: #232858;
+  --brand-ink: #f2f4ff;
 }
 
 * {
@@ -27,7 +68,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--brand-font);
   background-color: var(--primary-bg);
   margin: 0;
   overflow-x: hidden;
@@ -55,9 +96,12 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 20px;
-  background-color: var(--card-bg);
-  border-bottom: 1px solid var(--border-color);
+  padding: 12px 20px;
+  /* #0277d6, not raw --brand-blue (#038ff8) - white text/icons directly on
+     raw brand-blue measures 3.34:1 (fails WCAG AA 4.5:1); #0277d6 measures
+     4.55:1, same fix already applied to button text elsewhere in this file. */
+  background-color: #0277d6;
+  border-bottom: 1px solid rgba(25, 29, 71, 0.12);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -76,6 +120,33 @@ body {
   margin-left: 60px; /* Add space to avoid overlapping with macOS window controls */
 }
 
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 16px;
+  -webkit-app-region: drag;
+}
+
+.app-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: block;
+}
+
+.app-brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--brand-white);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.app-logo {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
 .header-center {
   flex-grow: 1;
   max-width: 400px;
@@ -91,7 +162,9 @@ body {
 .search-icon {
   position: absolute;
   left: 10px;
-  color: var(--text-secondary);
+  /* Sits on the search input's white fill now, not the blue header bar
+     directly - brand-slate (#5B6070) on white is 5.6:1, passes AA. */
+  color: var(--brand-slate);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -100,56 +173,118 @@ body {
 .search-input {
   width: 100%;
   padding: 8px 8px 8px 35px;
-  border-radius: 5px;
-  border: 1px solid var(--border-color);
-  background-color: #f2f2f2;
+  border-radius: var(--brand-r-sm);
+  border: 1px solid transparent;
+  /* Solid white, not an off-white tint - this sits on a blue header now and
+     needs a hard, unambiguous boundary + max contrast for its own text. */
+  background-color: var(--brand-white);
   font-size: 14px;
+  font-family: var(--brand-font);
+  color: var(--brand-ink-navy);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
   -webkit-app-region: no-drag; /* Make input not draggable to allow text selection */
+}
+
+.search-input::placeholder {
+  /* Explicit, not the browser default (~50% opacity of the text color,
+     which reads too faint - user-reported "search text" contrast issue). */
+  color: var(--brand-slate);
+  opacity: 1;
+}
+
+.search-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6);
 }
 
 .btn {
   padding: 8px 16px;
-  border-radius: 5px;
+  border-radius: var(--brand-r-sm);
   border: none;
   cursor: pointer;
-  font-weight: 500;
+  font-weight: 600;
+  font-family: var(--brand-font);
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
   -webkit-app-region: no-drag; /* Make button clickable */
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Adversarial review (Codex + Opus, 2026-07-22) found real WCAG AA contrast
+   failures on the first pass: raw --brand-blue (#038ff8) is 3.34:1 for both
+   white-on-blue and blue-on-white text, below the 4.5:1 normal-text minimum.
+   #0277d6 (already used as the hover shade) measures 4.55:1 and is the
+   fix, not a stronger font-weight alone - applied as the interactive-text
+   color below, not just on hover. */
+.btn:focus-visible {
+  outline: 2px solid var(--brand-blue);
+  outline-offset: 2px;
+}
+
+/* Header sits on a blue bar now - a blue focus ring would be invisible
+   against it, so header buttons get a white ring instead. */
+.header .btn:focus-visible {
+  outline-color: var(--brand-white);
+}
+
 .back-btn {
   background-color: transparent;
-  color: var(--text-secondary);
+  color: var(--brand-white);
   padding: 8px;
 }
 
 .toggle-sidebar-btn {
   background-color: transparent;
-  color: var(--text-secondary);
+  color: var(--brand-white);
   padding: 8px;
   margin-right: 10px;
   display: none;
 }
 
-.new-note-btn, .join-meeting-btn {
-  background-color: var(--card-bg);
-  border: 1px solid var(--border-color);
+/* Header background is now #0277d6 (see .header) - secondary actions are
+   outlined white on the blue bar; the primary CTA (.join-meeting-btn) is
+   the one solid white-filled pill, which is what makes it read as THE
+   action per §12.3's "exactly one primary CTA per view" instead of
+   competing outlined-blue-on-white buttons. */
+.new-note-btn, .sign-in-btn {
+  background-color: transparent;
+  border: 1.5px solid rgba(255, 255, 255, 0.7);
+  color: var(--brand-white);
   margin-right: 10px;
   -webkit-app-region: no-drag; /* Make button clickable */
 }
 
+.new-note-btn:hover, .sign-in-btn:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--brand-white);
+}
+
 .join-meeting-btn {
-  background-color: var(--brand-blue);
-  color: white;
+  background-color: var(--brand-white);
+  border: 1.5px solid var(--brand-white);
+  color: #0277d6;
+  margin-right: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.join-meeting-btn:hover:not(:disabled) {
+  background-color: #eaf4ff;
 }
 
 .join-meeting-btn:disabled {
-  background-color: #ccc;
-  color: #666;
+  background-color: rgba(255, 255, 255, 0.35);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.75);
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 1;
+}
+
+.sign-in-btn:disabled {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.6);
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .user-avatar {
@@ -157,7 +292,13 @@ body {
   height: 32px;
   border-radius: 50%;
   overflow: hidden;
-  background-color: #ddd;
+  background-color: var(--brand-white);
+  color: #0277d6;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   -webkit-app-region: no-drag; /* Make avatar clickable */
 }
 
@@ -169,22 +310,24 @@ body {
 
 /* Main Content Styles */
 .main-content {
-  padding: 20px;
+  padding: 32px 24px;
   flex-grow: 1;
   width: 100%;
 }
 
 .content-container {
-  max-width: 800px;
+  max-width: 760px;
   margin: 0 auto;
   width: 100%;
 }
 
 .section-title {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 15px;
-  margin-top: 25px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--brand-ink-navy);
+  letter-spacing: -0.01em;
+  margin-bottom: 18px;
+  margin-top: 8px;
   width: 100%;
 }
 
@@ -199,15 +342,15 @@ body {
   display: flex;
   align-items: center;
   padding: 15px;
-  background-color: var(--card-bg);
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background-color: var(--brand-white);
+  border-radius: var(--brand-r-md);
+  box-shadow: var(--brand-shadow);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: box-shadow 0.2s ease;
 }
 
 .meeting-card:hover {
-  background-color: #f5f5f5;
+  box-shadow: 0 8px 24px rgba(25, 29, 71, 0.12), 0 2px 6px rgba(25, 29, 71, 0.06);
 }
 
 .meeting-icon {
@@ -226,17 +369,18 @@ body {
 }
 
 .meeting-title {
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
   margin-bottom: 4px;
 }
 
 .meeting-time {
-  font-size: 14px;
-  color: var(--text-secondary);
+  font-size: 13px;
+  color: var(--brand-slate);
 }
 
 .meeting-demo-link {
-  color: #0077ff;
+  color: #0277d6; /* --brand-blue is 3.34:1 on white, fails WCAG AA; 4.55:1 */
   text-decoration: none;
   cursor: pointer;
 }
@@ -393,7 +537,7 @@ body {
 
 /* Simple text editor styles */
 #simple-editor {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--brand-font);
   font-size: 16px;
   line-height: 1.6;
   color: #333;
@@ -867,7 +1011,7 @@ body {
 .transcript-text {
   color: #e0e0e0;
   margin-bottom: 4px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--brand-font);
 }
 
 .transcript-timestamp {

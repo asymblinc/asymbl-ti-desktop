@@ -2,12 +2,16 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Muesli - Debug Notes</title>
+    <title>Asymbl Recall</title>
   </head>
   <body>
     <div class="app-container">
       <header class="header" id="drag-region">
         <div class="header-left">
+          <div class="app-brand">
+            <img id="appLogo" alt="" class="app-logo" />
+            <span class="app-brand-name">Recall</span>
+          </div>
           <button class="btn back-btn" id="backButton" style="display: none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M20 11H7.83L13.42 5.41L12 4L4 12L12 20L13.41 18.59L7.83 13H20V11Z" fill="currentColor"/>
@@ -18,7 +22,7 @@
           <div class="search-container">
             <span class="search-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M15.5 14H14.71L14.43 13.73C15.41 12.59 16 11.11 16 9.5C16 5.91 13.09 3 9.5 3C5.91 3 3 5.91 3 9.5C3 13.09 5.91 16 9.5 16C11.11 16 12.59 15.41 13.73 14.43L14 14.71V15.5L19 20.49L20.49 19L15.5 14ZM9.5 14C7.01 14 5 11.99 5 9.5C5 7.01 7.01 5 9.5 5C11.99 5 14 7.01 14 9.5C14 11.99 11.99 14 9.5 14Z" fill="#666666"/>
+                <path d="M15.5 14H14.71L14.43 13.73C15.41 12.59 16 11.11 16 9.5C16 5.91 13.09 3 9.5 3C5.91 3 3 5.91 3 9.5C3 13.09 5.91 16 9.5 16C11.11 16 12.59 15.41 13.73 14.43L14 14.71V15.5L19 20.49L20.49 19L15.5 14ZM9.5 14C7.01 14 5 11.99 5 9.5C5 7.01 7.01 5 9.5 5C11.99 5 14 7.01 14 9.5C14 11.99 11.99 14 9.5 14Z" fill="currentColor"/>
               </svg>
             </span>
             <input type="text" class="search-input" placeholder="Search notes">
@@ -29,10 +33,10 @@
           <button class="btn join-meeting-btn" id="joinMeetingBtn">Record Meeting</button>
           <button id="toggleSidebar" class="btn toggle-sidebar-btn" style="display: none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M3 18H21V16H3V18ZM3 13H21V11H3V13ZM3 6V8H21V6H3Z" fill="#666666"/>
+              <path d="M3 18H21V16H3V18ZM3 13H21V11H3V13ZM3 6V8H21V6H3Z" fill="currentColor"/>
             </svg>
           </button>
-          <button class="btn sign-in-btn" id="signInBtn" style="display: none;">Sign in with Salesforce</button>
+          <button class="btn sign-in-btn" id="signInBtn" style="display: none;">Sign in with Asymbl</button>
           <div class="user-avatar" id="userAvatar" style="display: none;">
             <svg width="32" height="32" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
               <rect width="40" height="40" rx="20" fill="#f0f0f0"/>
