@@ -404,13 +404,37 @@ const fileOperationManager = {
         setImmediate(() => this.processQueue());
       }
     }
-  },
-
-  // Helper to write data directly - internally uses scheduleOperation
-  writeData: async function (data) {
-    return this.scheduleOperation(() => data); // Simply return the data to write
   }
 };
+
+// Real bug found via live testing (2026-07-22): writeData(data) unconditionally
+// overwrites the file with whatever blob the caller already had in memory -
+// callers that read the file once at the top of a long-running handler
+// (SDK calls, network requests in between) and write much later can silently
+// clobber any other write (autosave, transcript processing) that landed in
+// the gap, since writeData never looks at what's actually on disk/cached.
+// This routes the read-mutate-write through the queue's own fresh read
+// instead, so a mutation is always applied to the latest state, not a stale
+// snapshot - confirmed live: meeting.recordingId was set and "saved" via
+// writeData(), but ended up null on disk because another write landed first.
+async function updateMeetingById(meetingId, mutatorFn) {
+  // scheduleOperation's own promise resolves to {success: true} regardless
+  // of whether a meeting was found (it's reporting "the write happened",
+  // not "the meeting existed") - callers need to know the latter, so track
+  // it via a closure variable set inside the operation instead.
+  let found = null;
+  await fileOperationManager.scheduleOperation(async (currentData) => {
+    const meeting = currentData.pastMeetings.find((m) => m.id === meetingId);
+    if (meeting) {
+      await mutatorFn(meeting, currentData);
+      found = meeting;
+    } else {
+      console.log(`updateMeetingById: no meeting found with ID ${meetingId}`);
+    }
+    return currentData;
+  });
+  return found;
+}
 
 // Create a desktop SDK upload token via the control plane (F9). Previously
 // called a local Express server (deleted, src/server.js) that held the
@@ -602,20 +626,13 @@ function initSDK() {
           console.log("Updating existing note title for:", noteId);
 
           try {
-            // Read the current meetings data
-            const meetingsData = await fileOperationManager.readMeetingsData();
-
-            // Find the meeting in pastMeetings
-            const meeting = meetingsData.pastMeetings.find(m => m.id === noteId);
+            let oldTitle;
+            const meeting = await updateMeetingById(noteId, (m) => {
+              oldTitle = m.title;
+              m.title = window.title;
+            });
 
             if (meeting) {
-              const oldTitle = meeting.title;
-
-              // Update the title
-              meeting.title = window.title;
-
-              // Save the updated data
-              await fileOperationManager.writeData(meetingsData);
               console.log(`Successfully updated meeting title from "${oldTitle}" to "${window.title}"`);
 
               // Notify the renderer to update the UI
@@ -826,8 +843,26 @@ function initSDK() {
 // Handle saving meetings data
 ipcMain.handle('saveMeetingsData', async (event, data) => {
   try {
-    // Use the file operation manager to safely write the file
-    await fileOperationManager.writeData(data);
+    // Merge field-by-field per meeting ID against the freshest disk state,
+    // rather than overwriting the whole file with the renderer's copy - the
+    // renderer's meetingsData is loaded once and can be stale relative to
+    // concurrent main-process writes (transcript entries, recordingId,
+    // recallRecordingId, notesSessionId). Object.assign(fresh, incoming)
+    // only touches keys the renderer's object actually has, so a field it
+    // never knew about (set independently by main.js) survives the merge -
+    // still respects renderer-side deletions, since the merged array is
+    // built from the renderer's own list of what still exists.
+    await fileOperationManager.scheduleOperation(async (currentData) => {
+      for (const listKey of ['pastMeetings', 'upcomingMeetings']) {
+        const incomingList = data[listKey] || [];
+        const freshById = new Map((currentData[listKey] || []).map((m) => [m.id, m]));
+        currentData[listKey] = incomingList.map((incoming) => {
+          const fresh = freshById.get(incoming.id);
+          return fresh ? Object.assign(fresh, incoming) : incoming;
+        });
+      }
+      return currentData;
+    });
 
     // Spec B F8: fire-and-forget sync of every meeting with a
     // notesSessionId, on every save. Not diffed against the last-synced
@@ -887,43 +922,42 @@ ipcMain.handle('deleteMeeting', async (event, meetingId) => {
   try {
     console.log(`Deleting meeting with ID: ${meetingId}`);
 
-    // Read current data
-    const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
-    const meetingsData = JSON.parse(fileData);
-
-    // Find the meeting
-    const pastMeetingIndex = meetingsData.pastMeetings.findIndex(meeting => meeting.id === meetingId);
-    const upcomingMeetingIndex = meetingsData.upcomingMeetings.findIndex(meeting => meeting.id === meetingId);
-
     let meetingDeleted = false;
     let recordingId = null;
 
-    // Remove from past meetings if found
-    if (pastMeetingIndex !== -1) {
-      // Store the recording ID for later cleanup if needed
-      recordingId = meetingsData.pastMeetings[pastMeetingIndex].recordingId;
+    // Routed through scheduleOperation (not a raw read + writeData) so the
+    // deletion is applied to the freshest state, not a snapshot that could
+    // be missing a concurrent write (see updateMeetingById's comment).
+    await fileOperationManager.scheduleOperation(async (currentData) => {
+      const pastMeetingIndex = currentData.pastMeetings.findIndex(meeting => meeting.id === meetingId);
+      const upcomingMeetingIndex = currentData.upcomingMeetings.findIndex(meeting => meeting.id === meetingId);
 
-      // Remove the meeting
-      meetingsData.pastMeetings.splice(pastMeetingIndex, 1);
-      meetingDeleted = true;
-    }
+      // Remove from past meetings if found
+      if (pastMeetingIndex !== -1) {
+        // Store the recording ID for later cleanup if needed
+        recordingId = currentData.pastMeetings[pastMeetingIndex].recordingId;
 
-    // Remove from upcoming meetings if found
-    if (upcomingMeetingIndex !== -1) {
-      // Store the recording ID for later cleanup if needed
-      recordingId = meetingsData.upcomingMeetings[upcomingMeetingIndex].recordingId;
+        // Remove the meeting
+        currentData.pastMeetings.splice(pastMeetingIndex, 1);
+        meetingDeleted = true;
+      }
 
-      // Remove the meeting
-      meetingsData.upcomingMeetings.splice(upcomingMeetingIndex, 1);
-      meetingDeleted = true;
-    }
+      // Remove from upcoming meetings if found
+      if (upcomingMeetingIndex !== -1) {
+        // Store the recording ID for later cleanup if needed
+        recordingId = currentData.upcomingMeetings[upcomingMeetingIndex].recordingId;
+
+        // Remove the meeting
+        currentData.upcomingMeetings.splice(upcomingMeetingIndex, 1);
+        meetingDeleted = true;
+      }
+
+      return currentData;
+    });
 
     if (!meetingDeleted) {
       return { success: false, error: 'Meeting not found' };
     }
-
-    // Save the updated data
-    await fileOperationManager.writeData(meetingsData);
 
     // If the meeting had a recording, cleanup the reference in the global tracking
     if (recordingId && global.activeMeetingIds && global.activeMeetingIds[recordingId]) {
@@ -944,18 +978,17 @@ ipcMain.handle('generateMeetingSummary', async (event, meetingId) => {
   try {
     console.log(`Manual summary generation requested for meeting: ${meetingId}`);
 
-    // Read current data
-    const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
-    const meetingsData = JSON.parse(fileData);
+    // A read-only lookup to check transcript presence and pass the meeting
+    // into generateMeetingSummary - the actual mutation happens later via
+    // updateMeetingById against fresh data, not this snapshot, since
+    // generateMeetingSummary is an await boundary a concurrent write could
+    // land during.
+    const initialData = await fileOperationManager.readMeetingsData();
+    const meeting = initialData.pastMeetings.find(m => m.id === meetingId);
 
-    // Find the meeting
-    const pastMeetingIndex = meetingsData.pastMeetings.findIndex(meeting => meeting.id === meetingId);
-
-    if (pastMeetingIndex === -1) {
+    if (!meeting) {
       return { success: false, error: 'Meeting not found' };
     }
-
-    const meeting = meetingsData.pastMeetings[pastMeetingIndex];
 
     // Check if there's a transcript to summarize
     if (!meeting.transcript || meeting.transcript.length === 0) {
@@ -971,16 +1004,11 @@ ipcMain.handle('generateMeetingSummary', async (event, meetingId) => {
     // Generate the summary
     const summary = await generateMeetingSummary(meeting);
 
-    // Get meeting title for use in the new content
-    const meetingTitle = meeting.title || "Meeting Notes";
-
-    // Create content with the AI-generated summary
-    meeting.content = summary;
-
-    meeting.hasSummary = true;
-
     // Save the updated data with summary
-    await fileOperationManager.writeData(meetingsData);
+    await updateMeetingById(meetingId, (m) => {
+      m.content = summary;
+      m.hasSummary = true;
+    });
 
     console.log('Updated meeting note with AI summary');
 
@@ -1004,18 +1032,10 @@ ipcMain.handle('startManualRecording', async (event, meetingId) => {
   try {
     console.log(`Starting manual desktop recording for meeting: ${meetingId}`);
 
-    // Read current data
-    const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
-    const meetingsData = JSON.parse(fileData);
-
-    // Find the meeting
-    const pastMeetingIndex = meetingsData.pastMeetings.findIndex(meeting => meeting.id === meetingId);
-
-    if (pastMeetingIndex === -1) {
+    const initialData = await fileOperationManager.readMeetingsData();
+    if (!initialData.pastMeetings.some(meeting => meeting.id === meetingId)) {
       return { success: false, error: 'Meeting not found' };
     }
-
-    const meeting = meetingsData.pastMeetings[pastMeetingIndex];
 
     try {
       // Prepare desktop audio recording - this is the key difference from our previous implementation
@@ -1041,13 +1061,19 @@ ipcMain.handle('startManualRecording', async (event, meetingId) => {
         };
       }
 
-      // Store the recording ID in the meeting
-      meeting.recordingId = key;
-
-      // Initialize transcript array if not present
-      if (!meeting.transcript) {
-        meeting.transcript = [];
-      }
+      // Store the recording ID in the meeting - routed through
+      // updateMeetingById (fresh-read-then-write) rather than writing the
+      // stale meetingsData snapshot read at the top of this handler, since
+      // prepareDesktopAudioRecording()/createDesktopSdkUpload() above are
+      // real await boundaries a concurrent write (autosave, transcript
+      // processing) could land during. This is the exact bug found live:
+      // recordingId was set here but ended up null on disk.
+      await updateMeetingById(meetingId, (meeting) => {
+        meeting.recordingId = key;
+        if (!meeting.transcript) {
+          meeting.transcript = [];
+        }
+      });
 
       // Store tracking info for the recording
       global.activeMeetingIds = global.activeMeetingIds || {};
@@ -1058,9 +1084,6 @@ ipcMain.handle('startManualRecording', async (event, meetingId) => {
 
       // Register the recording in our active recordings tracker
       activeRecordings.addRecording(key, meetingId, 'Desktop Recording');
-
-      // Save the updated data
-      await fileOperationManager.writeData(meetingsData);
 
       // Start recording with the key from prepareDesktopAudioRecording
       console.log('Starting desktop recording with key:', key);
@@ -1124,18 +1147,16 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
   try {
     console.log(`Streaming summary generation requested for meeting: ${meetingId}`);
 
-    // Read current data
-    const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
-    const meetingsData = JSON.parse(fileData);
+    // Read-only snapshot for the transcript check and to pass into
+    // generateMeetingSummary - the actual persisted mutation happens later
+    // via updateMeetingById against fresh data, since generateMeetingSummary
+    // is a real await boundary a concurrent write could land during.
+    const initialData = await fileOperationManager.readMeetingsData();
+    const meeting = initialData.pastMeetings.find(m => m.id === meetingId);
 
-    // Find the meeting
-    const pastMeetingIndex = meetingsData.pastMeetings.findIndex(meeting => meeting.id === meetingId);
-
-    if (pastMeetingIndex === -1) {
+    if (!meeting) {
       return { success: false, error: 'Meeting not found' };
     }
-
-    const meeting = meetingsData.pastMeetings[pastMeetingIndex];
 
     // Check if there's a transcript to summarize
     if (!meeting.transcript || meeting.transcript.length === 0) {
@@ -1183,12 +1204,11 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
     // Generate summary with streaming
     const summary = await generateMeetingSummary(meeting, streamProgress);
 
-    // Make sure the final content is set correctly
-    meeting.content = summary;
-    meeting.hasSummary = true;
-
     // Save the updated data with summary
-    await fileOperationManager.writeData(meetingsData);
+    await updateMeetingById(meetingId, (m) => {
+      m.content = summary;
+      m.hasSummary = true;
+    });
 
     console.log('Updated meeting note with AI summary (streaming)');
 
@@ -1236,16 +1256,6 @@ async function createMeetingNoteAndRecord(platformName) {
     global.activeMeetingIds = global.activeMeetingIds || {};
     global.activeMeetingIds[detectedMeeting.window.id] = { platformName };
 
-    // Read the current meetings data
-    let meetingsData;
-    try {
-      const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
-      meetingsData = JSON.parse(fileData);
-    } catch (error) {
-      console.error('Error reading meetings data:', error);
-      meetingsData = { upcomingMeetings: [], pastMeetings: [] };
-    }
-
     // Generate a unique ID for the new meeting
     const id = 'meeting-' + Date.now();
 
@@ -1286,12 +1296,14 @@ async function createMeetingNoteAndRecord(platformName) {
     // This ensures the UI knows about it immediately
     activeRecordings.addRecording(detectedMeeting.window.id, id, platformName);
 
-    // Add to pastMeetings
-    meetingsData.pastMeetings.unshift(newMeeting);
-
-    // Save the updated data
+    // Add to pastMeetings - routed through scheduleOperation (fresh read,
+    // not this function's own independent read) so a concurrent write to a
+    // different meeting isn't overwritten by an earlier snapshot.
     console.log(`Saving meeting data to ${meetingsFilePath} with ID: ${id}`);
-    await fileOperationManager.writeData(meetingsData);
+    await fileOperationManager.scheduleOperation(async (currentData) => {
+      currentData.pastMeetings.unshift(newMeeting);
+      return currentData;
+    });
 
     // Verify the file was written by reading it back
     try {
@@ -1366,8 +1378,9 @@ async function createMeetingNoteAndRecord(platformName) {
     if (blockReason) {
       console.log('Recording blocked by capture policy:', blockReason);
       try {
-        newMeeting.content = `Recording not started: ${blockReason}`;
-        await fileOperationManager.writeData(meetingsData);
+        await updateMeetingById(id, (meeting) => {
+          meeting.content = `Recording not started: ${blockReason}`;
+        });
       } catch (writeError) {
         console.error('Error recording capture-policy block reason:', writeError);
       }
@@ -1390,20 +1403,21 @@ async function createMeetingNoteAndRecord(platformName) {
 
       // Spec B F8: persist notes_session_id on the meeting record itself
       // (not just in-memory) so every future note save can sync, not just
-      // ones made while this recording is still active.
-      if (uploadData && uploadData.session && uploadData.session.notes_session_id) {
-        newMeeting.notesSessionId = uploadData.session.notes_session_id;
-        await fileOperationManager.writeData(meetingsData);
-      }
-
-      // Recall's own recording_id - needed later to trigger post-meeting
-      // Perfect Diarization (real speaker names) via
+      // ones made while this recording is still active. Recall's own
+      // recording_id is captured the same way - needed later to trigger
+      // post-meeting Perfect Diarization (real speaker names) via
       // /api/v1/recording/{id}/create_transcript/, separate from the live
       // You/Them fallback used during the recording itself. Not acted on
       // yet - just captured so it isn't lost once the recording finalizes.
-      if (uploadData && uploadData.session && uploadData.session.recall_recording_id) {
-        newMeeting.recallRecordingId = uploadData.session.recall_recording_id;
-        await fileOperationManager.writeData(meetingsData);
+      if (uploadData && uploadData.session && (uploadData.session.notes_session_id || uploadData.session.recall_recording_id)) {
+        await updateMeetingById(id, (meeting) => {
+          if (uploadData.session.notes_session_id) {
+            meeting.notesSessionId = uploadData.session.notes_session_id;
+          }
+          if (uploadData.session.recall_recording_id) {
+            meeting.recallRecordingId = uploadData.session.recall_recording_id;
+          }
+        });
       }
 
       if (!uploadData || !uploadData.upload_token) {
@@ -1742,22 +1756,13 @@ async function generateMeetingSummary(_meeting, progressCallback = null) {
 // Function to update a note with recording information when recording ends
 async function updateNoteWithRecordingInfo(recordingId) {
   try {
-    // Read the current meetings data
-    let meetingsData;
-    try {
-      const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
-      meetingsData = JSON.parse(fileData);
-    } catch (error) {
-      console.error('Error reading meetings data:', error);
-      return;
-    }
+    // Read-only lookup for the transcript/title/id checks below - the
+    // actual mutation happens via scheduleOperation against fresh data,
+    // not this snapshot (same stale-write race as startManualRecording).
+    const initialData = await fileOperationManager.readMeetingsData();
+    const meeting = initialData.pastMeetings.find(m => m.recordingId === recordingId);
 
-    // Find the meeting note with this recording ID
-    const noteIndex = meetingsData.pastMeetings.findIndex(meeting =>
-      meeting.recordingId === recordingId
-    );
-
-    if (noteIndex === -1) {
+    if (!meeting) {
       console.log('No meeting note found for recording ID:', recordingId);
       return;
     }
@@ -1766,23 +1771,26 @@ async function updateNoteWithRecordingInfo(recordingId) {
     const now = new Date();
     const formattedDate = now.toLocaleString();
 
-    // Update the meeting note content
-    const meeting = meetingsData.pastMeetings[noteIndex];
-    const content = meeting.content;
-
-    // Replace the "Recording: In Progress..." line with completed information
-    let updatedContent = content.replace(
+    // Update the meeting object (mutating this local copy so the summary
+    // logic below can keep reading meeting.content/.transcript/.id as
+    // before - the persisted write is separate, against fresh data)
+    meeting.content = meeting.content.replace(
       "Recording: In Progress...",
       `Recording: Completed at ${formattedDate}\n`
     );
-
-    // Update the meeting object
-    meeting.content = updatedContent;
     meeting.recordingComplete = true;
     meeting.recordingEndTime = now.toISOString();
 
     // Save the initial update
-    await fileOperationManager.writeData(meetingsData);
+    await fileOperationManager.scheduleOperation(async (currentData) => {
+      const freshMeeting = currentData.pastMeetings.find(m => m.recordingId === recordingId);
+      if (freshMeeting) {
+        freshMeeting.content = meeting.content;
+        freshMeeting.recordingComplete = true;
+        freshMeeting.recordingEndTime = meeting.recordingEndTime;
+      }
+      return currentData;
+    });
 
     // Generate AI summary if there's a transcript
     if (meeting.transcript && meeting.transcript.length > 0) {
@@ -1827,13 +1835,12 @@ async function updateNoteWithRecordingInfo(recordingId) {
       // Generate the summary with streaming updates
       const summary = await generateMeetingSummary(meeting, streamProgress);
 
-      // Set the content to just the summary
-      meeting.content = `${summary}`;
-
-      meeting.hasSummary = true;
-
-      // Save the updated data with summary
-      await fileOperationManager.writeData(meetingsData);
+      // Save the updated data with summary, against fresh data by id (not
+      // this function's stale initial snapshot)
+      await updateMeetingById(meeting.id, (m) => {
+        m.content = `${summary}`;
+        m.hasSummary = true;
+      });
 
       console.log('Updated meeting note with AI summary');
     }
