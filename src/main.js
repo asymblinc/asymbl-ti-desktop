@@ -424,7 +424,12 @@ async function createDesktopSdkUpload(decisionToken = null, interviewId = null) 
   const result = await controlPlaneClient.createDesktopSdkUpload(decisionToken, interviewId);
   if (result.status !== 'success') {
     console.error("Failed to create upload token:", result.message);
-    return null;
+    // Real bug found via live use: this used to return null on any failure,
+    // discarding the real reason (e.g. "Not signed in..." from a stale
+    // persisted refresh token that *looked* signed-in in the UI until this
+    // actual API call ran) - callers had no way to show anything but a
+    // generic "Failed to create recording token".
+    return { error: result.message };
   }
   console.log("Upload token created successfully:", result.upload_token);
   return result;
@@ -486,15 +491,26 @@ async function finalizeDesktopRecordingSession(windowId) {
 function initSDK() {
   console.log("Initializing Recall.ai SDK");
 
+  // Real bug found via a live test run: with no .env file present (only
+  // .env.example is committed), process.env.RECALLAI_API_URL was undefined,
+  // so the SDK fell back to its own default (api.recall.ai) - a different
+  // region than control-plane's RECALL_REGION_BASE (us-west-2.recall.ai)
+  // used to mint upload tokens. A token minted in one region is rejected
+  // as "invalid upload token" when the SDK tries to start recording against
+  // a different one. Same fallback pattern control-plane-client.js already
+  // uses for CONTROL_PLANE_URL, so this can't silently regress if .env is
+  // ever missing again.
+  const recallApiUrl = process.env.RECALLAI_API_URL || 'https://us-west-2.recall.ai';
+
   // Log the SDK initialization
   sdkLogger.logApiCall('init', {
     dev: process.env.NODE_ENV === 'development',
-    api_url: process.env.RECALLAI_API_URL
+    api_url: recallApiUrl
   });
 
   RecallAiSdk.init({
     // dev: true,
-    api_url: process.env.RECALLAI_API_URL
+    api_url: recallApiUrl
   });
 
   // Listen for meeting detected events
@@ -959,7 +975,7 @@ ipcMain.handle('generateMeetingSummary', async (event, meetingId) => {
     const meetingTitle = meeting.title || "Meeting Notes";
 
     // Create content with the AI-generated summary
-    meeting.content = `# ${meetingTitle}\n\n${summary}`;
+    meeting.content = summary;
 
     meeting.hasSummary = true;
 
@@ -1014,7 +1030,15 @@ ipcMain.handle('startManualRecording', async (event, meetingId) => {
       // Create a recording token
       const uploadData = await createDesktopSdkUpload();
       if (!uploadData || !uploadData.upload_token) {
-        return { success: false, error: 'Failed to create recording token' };
+        // getAuthStatus() can report "signed in" from a stale persisted
+        // refresh token that's since expired/been revoked - this is the
+        // first real API call that actually exercises it, so surface the
+        // real reason instead of a generic string when that's the cause.
+        const isAuthError = uploadData?.error?.includes('Not signed in');
+        return {
+          success: false,
+          error: isAuthError ? 'Sign in with Asymbl to record a meeting' : (uploadData?.error || 'Failed to create recording token'),
+        };
       }
 
       // Store the recording ID in the meeting
@@ -1128,7 +1152,7 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
     const meetingTitle = meeting.title || "Meeting Notes";
 
     // Initial content with placeholders
-    meeting.content = `# ${meetingTitle}\n\nGenerating summary...`;
+    meeting.content = 'Generating summary...';
 
     // Update the note on the frontend right away
     mainWindow.webContents.send('summary-update', {
@@ -1139,7 +1163,7 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
     // Create progress callback for streaming updates
     const streamProgress = (currentText) => {
       // Update content with current streaming text
-      meeting.content = `# ${meetingTitle}\n\n## AI-Generated Meeting Summary\n${currentText}`;
+      meeting.content = `## AI-Generated Meeting Summary\n${currentText}`;
 
       // Send immediate update to renderer - don't debounce or delay this
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1160,7 +1184,7 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
     const summary = await generateMeetingSummary(meeting, streamProgress);
 
     // Make sure the final content is set correctly
-    meeting.content = `# ${meetingTitle}\n\n${summary}`;
+    meeting.content = summary;
     meeting.hasSummary = true;
 
     // Save the updated data with summary
@@ -1236,7 +1260,7 @@ async function createMeetingNoteAndRecord(platformName) {
       : `${platformName} Meeting - ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 
     // Create a template for the note content
-    const template = `# ${meetingTitle}\nRecording: In Progress...`;
+    const template = 'Recording: In Progress...';
 
     // Create a new meeting object
     const newMeeting = {
@@ -1342,7 +1366,7 @@ async function createMeetingNoteAndRecord(platformName) {
     if (blockReason) {
       console.log('Recording blocked by capture policy:', blockReason);
       try {
-        newMeeting.content = `# ${meetingTitle}\nRecording not started: ${blockReason}`;
+        newMeeting.content = `Recording not started: ${blockReason}`;
         await fileOperationManager.writeData(meetingsData);
       } catch (writeError) {
         console.error('Error recording capture-policy block reason:', writeError);
@@ -1369,6 +1393,16 @@ async function createMeetingNoteAndRecord(platformName) {
       // ones made while this recording is still active.
       if (uploadData && uploadData.session && uploadData.session.notes_session_id) {
         newMeeting.notesSessionId = uploadData.session.notes_session_id;
+        await fileOperationManager.writeData(meetingsData);
+      }
+
+      // Recall's own recording_id - needed later to trigger post-meeting
+      // Perfect Diarization (real speaker names) via
+      // /api/v1/recording/{id}/create_transcript/, separate from the live
+      // You/Them fallback used during the recording itself. Not acted on
+      // yet - just captured so it isn't lost once the recording finalizes.
+      if (uploadData && uploadData.session && uploadData.session.recall_recording_id) {
+        newMeeting.recallRecordingId = uploadData.session.recall_recording_id;
         await fileOperationManager.writeData(meetingsData);
       }
 
@@ -1623,10 +1657,21 @@ async function processTranscriptData(evt) {
       return; // No words to process
     }
 
-    // Get speaker information
+    // Get speaker information. T17 (confirmed via live test 2026-07-22):
+    // Recall's own streaming engine returns no transcript.provider_data for
+    // this desktop-capture path, so real diarization/names aren't
+    // available - participant.name is always the generic "Host"/"Guest"
+    // placeholder. Per owner decision, fall back to a You/Them framing
+    // using participant.is_host as the signal (the only real per-utterance
+    // attribution this event actually carries) - "Host" is assumed to be
+    // the local desktop-app user, which holds for the common 1:1-call case
+    // this framing targets but isn't guaranteed for every meeting platform.
     let speaker;
-    if (evt.data.data.participant?.name && evt.data.data.participant?.name !== "Host" && evt.data.data.participant?.name !== "Guest") {
-      speaker = evt.data.data.participant?.name;
+    const isHostSpeaker = evt.data.data.participant?.is_host;
+    if (isHostSpeaker === true) {
+      speaker = "You";
+    } else if (isHostSpeaker === false) {
+      speaker = "Them";
     } else if (currentUnknownSpeaker !== -1) {
       speaker = `Speaker ${currentUnknownSpeaker}`;
     } else {
@@ -1750,7 +1795,7 @@ async function updateNoteWithRecordingInfo(recordingId) {
       const meetingTitle = meeting.title || "Meeting Notes";
 
       // Create initial content with placeholder
-      meeting.content = `# ${meetingTitle}\nGenerating summary...`;
+      meeting.content = 'Generating summary...';
 
       // Notify any open editors immediately
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1763,7 +1808,7 @@ async function updateNoteWithRecordingInfo(recordingId) {
       // Create progress callback for streaming updates
       const streamProgress = (currentText) => {
         // Update content with current streaming text
-        meeting.content = `# ${meetingTitle}\n\n${currentText}`;
+        meeting.content = currentText;
 
         // Send immediate update to renderer if note is open
         if (mainWindow && !mainWindow.isDestroyed()) {

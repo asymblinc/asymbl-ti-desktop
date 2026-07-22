@@ -97,10 +97,10 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  /* #0277d6, not raw --brand-blue (#038ff8) - white text/icons directly on
-     raw brand-blue measures 3.34:1 (fails WCAG AA 4.5:1); #0277d6 measures
-     4.55:1, same fix already applied to button text elsewhere in this file. */
-  background-color: #0277d6;
+  /* #022D60 (owner-specified brand navy) - white text/icons on it measure
+     ~13.6:1 contrast, well past WCAG AA's 4.5:1 minimum (previously
+     #0277d6, chosen for the same reason at 4.55:1 - superseded). */
+  background-color: #022D60;
   border-bottom: 1px solid rgba(25, 29, 71, 0.12);
   position: sticky;
   top: 0;
@@ -144,7 +144,13 @@ body {
 }
 
 .app-logo {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+  /* Floating/3D look so the icon reads clearly against the darker navy
+     header (#022D60): a thin light ring to separate the icon's own edges
+     from the background, plus a soft drop shadow to lift it off the header. */
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 2px 4px rgba(0, 0, 0, 0.35),
+    0 4px 10px rgba(0, 0, 0, 0.25);
 }
 
 .header-center {
@@ -242,7 +248,7 @@ body {
   display: none;
 }
 
-/* Header background is now #0277d6 (see .header) - secondary actions are
+/* Header background is now #022D60 (see .header) - secondary actions are
    outlined white on the blue bar; the primary CTA (.join-meeting-btn) is
    the one solid white-filled pill, which is what makes it read as THE
    action per §12.3's "exactly one primary CTA per view" instead of
@@ -606,6 +612,37 @@ body {
 .app-container.debug-panel-open #simple-editor {
   padding: 15px;
   font-size: 14px;
+}
+
+/* Rendered read-only view of #simple-editor's markdown - shown by default,
+   swaps to the raw textarea on click so real markdown renders (headings,
+   lists, bold) instead of literal #/** characters. */
+.markdown-preview {
+  font-family: var(--brand-font);
+  font-size: 16px;
+  line-height: 1.6;
+  color: #333;
+  background-color: white;
+  padding: 20px;
+  width: 100%;
+  min-height: calc(100vh - 250px);
+  cursor: text;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3 {
+  color: var(--brand-ink-navy, #032d60);
+  margin: 0.6em 0 0.3em;
+}
+
+.markdown-preview ul,
+.markdown-preview ol {
+  padding-left: 1.4em;
+}
+
+.markdown-preview p {
+  margin: 0.4em 0;
 }
 
 /* Sidebar */

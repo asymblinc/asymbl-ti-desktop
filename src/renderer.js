@@ -7,6 +7,33 @@
  */
 
 import './index.css';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+marked.setOptions({ mangle: false, headerIds: false });
+
+// Renders #simple-editor's markdown content into the read-only preview pane
+// shown by default (real bug found via live use: the note view was a bare
+// textarea with no rendering at all, so raw #/** characters showed
+// literally). Keeps the existing textarea/autosave/streaming-update logic
+// completely untouched - this only adds a rendered view on top of it.
+function syncEditorPreview(content) {
+  const preview = document.getElementById('simple-editor-preview');
+  if (preview) {
+    // Content includes transcript-derived and (later) server-generated AI
+    // text, not just what the user typed - marked() doesn't sanitize
+    // embedded HTML, so sanitize before it ever reaches innerHTML.
+    preview.innerHTML = DOMPurify.sanitize(marked(content || ''));
+  }
+}
+
+function setEditorContent(value) {
+  const editorElement = document.getElementById('simple-editor');
+  if (editorElement) {
+    editorElement.value = value;
+  }
+  syncEditorPreview(value);
+}
 
 // Create empty meetings data structure to be filled from the file
 const meetingsData = {
@@ -82,9 +109,15 @@ async function refreshAuthUi() {
     newNoteBtn.title = signedIn ? '' : 'Sign in with Asymbl to record a meeting';
   }
   const joinMeetingBtn = document.getElementById('joinMeetingBtn');
-  if (joinMeetingBtn && !signedIn) {
-    joinMeetingBtn.disabled = true;
-    joinMeetingBtn.title = 'Sign in with Asymbl to record a meeting';
+  if (joinMeetingBtn) {
+    // Re-evaluate against the last known detection state, not just
+    // "signed out" - onMeetingDetectionStatus only fires on a detection
+    // change, so if a meeting was already detected before sign-in
+    // completed, no new event arrives to re-enable the button. Real gap
+    // found during end-to-end testing 2026-07-22 (stayed greyed out after
+    // sign-in with an active Slack meeting already detected).
+    joinMeetingBtn.disabled = !window.meetingDetected || !signedIn;
+    joinMeetingBtn.title = signedIn ? '' : 'Sign in with Asymbl to record a meeting';
   }
   // The JWT only carries email, no display name/photo (contracts/
   // asymbl-jwt-claims.yaml) - initials + a hover tooltip is the honest
@@ -405,12 +438,12 @@ function showHomeView() {
     joinMeetingBtn.style.display = 'block';
     joinMeetingBtn.innerHTML = `Record ${window.meetingPlatform || "Meeting"}`;
 
-    // Enable/disable based on meeting detection
-    if (window.meetingDetected) {
-      joinMeetingBtn.disabled = false;
-    } else {
-      joinMeetingBtn.disabled = true;
-    }
+    // Enable/disable based on meeting detection AND sign-in state - matches
+    // refreshAuthUi()/onMeetingDetectionStatus's gating (real gap found via
+    // review: this path ignored isSignedIn, so navigating home while signed
+    // out with a meeting still detected re-enabled the button in the UI,
+    // even though main.js's join handler still refuses the actual join).
+    joinMeetingBtn.disabled = !window.meetingDetected || !window.isSignedIn;
   }
 }
 
@@ -458,18 +491,21 @@ function showEditorView(meetingId) {
   // Important: Reset the editor content completely
   if (editorElement) {
     editorElement.value = '';
+    syncEditorPreview('');
   }
 
   // Add a small delay to ensure the DOM has updated before setting content
   setTimeout(() => {
     if (meeting.content) {
       editorElement.value = meeting.content;
+      syncEditorPreview(meeting.content);
       console.log(`Loaded content for meeting: ${meetingId}, length: ${meeting.content.length} characters`);
     } else {
       // If content is missing, create template
       const now = new Date();
       const template = `# Meeting Title\n• ${meeting.title}\n\n# Meeting Date and Time\n• ${now.toLocaleString()}\n\n# Participants\n• \n\n# Description\n• \n\nChat with meeting transcript: `;
       editorElement.value = template;
+      syncEditorPreview(template);
 
       // Save this template to the meeting
       meeting.content = template;
@@ -671,6 +707,7 @@ async function createNewMeeting() {
   const editorElement = document.getElementById('simple-editor');
   if (editorElement) {
     editorElement.value = '';
+    syncEditorPreview('');
   }
 
   // Now show the editor view with the new meeting
@@ -1367,6 +1404,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     appLogo.src = require('./assets/asymbl-icon.png');
   }
 
+  // Click the rendered preview to switch to raw-markdown editing; blur the
+  // textarea to switch back to the rendered view. One-time listeners - both
+  // elements are static in index.html, unlike the per-meeting autosave
+  // handler in setupAutoSaveHandler().
+  const editorPreviewEl = document.getElementById('simple-editor-preview');
+  const editorTextareaEl = document.getElementById('simple-editor');
+  if (editorPreviewEl && editorTextareaEl) {
+    editorPreviewEl.addEventListener('click', () => {
+      editorPreviewEl.style.display = 'none';
+      editorTextareaEl.style.display = 'block';
+      editorTextareaEl.focus();
+    });
+    editorTextareaEl.addEventListener('blur', () => {
+      syncEditorPreview(editorTextareaEl.value);
+      editorTextareaEl.style.display = 'none';
+      editorPreviewEl.style.display = 'block';
+    });
+  }
+
   // Initialize the SDK Logger
   sdkLogger.init();
 
@@ -1476,6 +1532,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
         if (meeting) {
           document.getElementById('simple-editor').value = meeting.content;
+          syncEditorPreview(meeting.content);
         }
       });
     }
@@ -1567,23 +1624,35 @@ document.addEventListener('DOMContentLoaded', async () => {
               // Add pulse effect to show there's new content
               debugPanelToggle.classList.add('has-new-content');
 
-              // Create a mini notification if we're recording
+              // Show a mini notification if we're recording. Real bug found
+              // via live use: a new notification div was appended on every
+              // transcript chunk without removing the previous one, so fast
+              // chunks piled up at the same fixed position and rendered as
+              // illegible overlapping text. One at a time - reuse the same
+              // element and just update its content, matching the "single
+              // most-recent utterance" this notification is meant to show
+              // (the full scrollable history is the debug panel's Transcript
+              // section, not this transient toast).
               if (window.isRecording) {
-                const miniNotification = document.createElement('div');
-                miniNotification.className = 'debug-notification transcript-notification';
+                let miniNotification = document.getElementById('transcript-mini-notification');
+                if (!miniNotification) {
+                  miniNotification = document.createElement('div');
+                  miniNotification.id = 'transcript-mini-notification';
+                  miniNotification.className = 'debug-notification transcript-notification';
+                  document.body.appendChild(miniNotification);
+                }
+                miniNotification.classList.remove('fade-out');
                 miniNotification.innerHTML = `
                   <span class="debug-notification-speaker">${latestEntry.speaker || 'Unknown'}</span>:
                   <span class="debug-notification-text">${latestEntry.text.slice(0, 40)}${latestEntry.text.length > 40 ? '...' : ''}</span>
                 `;
 
-                // Add to document
-                document.body.appendChild(miniNotification);
-
-                // Remove after a short time
-                setTimeout(() => {
+                // Remove after a short time of no further updates
+                clearTimeout(window.__transcriptNotificationTimeout);
+                window.__transcriptNotificationTimeout = setTimeout(() => {
                   miniNotification.classList.add('fade-out');
                   setTimeout(() => {
-                    document.body.removeChild(miniNotification);
+                    miniNotification.remove();
                   }, 500);
                 }, 5000);
               }
@@ -1627,6 +1696,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (meeting) {
           // Update the editor with the new content containing the summary
           document.getElementById('simple-editor').value = meeting.content;
+          syncEditorPreview(meeting.content);
         }
       });
     }
@@ -1645,10 +1715,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Use requestAnimationFrame for smoother updates that don't block the main thread
       requestAnimationFrame(() => {
         editorElement.value = content;
+        syncEditorPreview(content);
 
         // Force the editor to scroll to the bottom to follow the new text
         // This creates a better experience of watching text appear
         editorElement.scrollTop = editorElement.scrollHeight;
+        const preview = document.getElementById('simple-editor-preview');
+        if (preview) {
+          preview.scrollTop = preview.scrollHeight;
+        }
       });
     }
   });
@@ -2034,7 +2109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           } else {
             // If starting failed, revert UI
             console.error('Failed to start recording:', result.error);
-            alert('Failed to start recording: ' + result.error);
+            showToast('Failed to start recording: ' + result.error);
             window.isRecording = false;
             recordButton.classList.remove('recording');
             recordIcon.style.display = 'block';
@@ -2188,6 +2263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
         if (meeting) {
           document.getElementById('simple-editor').value = meeting.content;
+          syncEditorPreview(meeting.content);
         }
       });
     }
