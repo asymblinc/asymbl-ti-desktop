@@ -7,10 +7,10 @@
 const axios = require('axios');
 const authStore = require('./auth-store');
 
-// Points at the asymbl-recall project (moved off talent-intelligence-493620
-// after docs/BLOCKERS.md #10's Cloud Run reachability issue turned out to be
-// organization-wide, not project-specific - see the GCP support ticket).
-const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-bz7wmytcsa-ue.a.run.app';
+// Temporary AWS App Runner bridge (docs/DECISIONS.md ADR-026) while GCP Cloud
+// Run's edge routing issue is open with Support (docs/BLOCKERS.md #10). Revert
+// to the *.run.app Cloud Run URL once that's resolved.
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://pf3mpvgzms.us-east-1.awsapprunner.com';
 
 /**
  * F9 (Spec B, Upload Paths): mint a Recall upload token via the control
@@ -20,14 +20,26 @@ const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plan
  * pre-fork local server returned, so call sites don't need to change), or
  * { status: 'error', message } on failure.
  */
+// TEMPORARY, dev-only (docs/DECISIONS.md ADR-027): F7-R11 real SF OAuth login
+// now works end-to-end, but requires clicking through a real Salesforce
+// login/consent screen. While testing, fall back to the control-plane's
+// dev-token route (also temporary, gated by ALLOW_DEV_TOKEN server-side) so
+// recording/upload/transcript can be exercised without that manual step.
+// Remove both sides once real login is the default tested path.
+async function getDevTokenFallback() {
+  try {
+    const response = await axios.post(`${CONTROL_PLANE_URL}/api/ti/desktop/dev-token`, {}, { timeout: 10000 });
+    authStore.setTokens({ access_token: response.data.access_token, refresh_token: null });
+    return response.data.access_token;
+  } catch (error) {
+    console.error('Dev-token fallback failed:', error.message);
+    return null;
+  }
+}
+
 async function createDesktopSdkUpload(decisionToken, interviewId = null) {
-  const accessToken = authStore.getAccessToken();
+  let accessToken = authStore.getAccessToken() || (await getDevTokenFallback());
   if (!accessToken) {
-    // [UNVERIFIED - blocked] F7-R11 per-user SF OAuth login isn't built yet
-    // (needs a real Salesforce Connected App, see docs/BLOCKERS.md in the
-    // Recall delivery repo). There is no way to obtain a real Asymbl access
-    // token from the desktop until that exists. Surfacing a clear error
-    // instead of silently no-op-ing or faking a token.
     return { status: 'error', message: 'Not signed in - Salesforce login is not yet wired up (blocked on Connected App credentials)' };
   }
 

@@ -3,6 +3,12 @@ require('dotenv').config();
 require('./crash-reporter').initCrashReporter();
 
 const { app, BrowserWindow, ipcMain, protocol, Notification } = require('electron');
+// electron-forge start (dev mode) runs the actual node_modules/electron
+// binary, whose bundle identity is baked in as "Electron" before any of our
+// code runs - the Dock hover-tooltip name comes from that, not from the
+// window title. setName() must run as early as possible to have any chance
+// of overriding it.
+app.setName('Asymbl Recall');
 const path = require('node:path');
 const url = require('url');
 const fs = require('fs');
@@ -70,6 +76,7 @@ const createWindow = () => {
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f9f9f9',
+    title: 'Asymbl Recall',
   });
 
   // Allow the debug panel header to act as a drag region
@@ -107,6 +114,20 @@ const createWindow = () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  // electron-forge start (dev mode) doesn't apply forge.config.js's packaged
+  // icon - that only takes effect on `make`/`package` builds. Set it
+  // explicitly here too so the Dock shows real branding in dev, not the
+  // stock Electron icon. __dirname resolves inside the webpack bundle
+  // (.webpack/main/), which doesn't copy static assets - app.getAppPath()
+  // (the project root in dev mode) is needed to find the real source file.
+  if (process.platform === 'darwin' && app.dock) {
+    try {
+      app.dock.setIcon(path.join(app.getAppPath(), 'src', 'assets', 'asymbl-icon.png'));
+    } catch (error) {
+      console.error('Failed to set dock icon:', error.message);
+    }
+  }
+
   console.log("Registering IPC handlers...");
   // Log all registered IPC handlers
   console.log("IPC handlers:", Object.keys(ipcMain._invokeHandlers));
@@ -116,7 +137,22 @@ app.whenReady().then(() => {
     return desktopAuth.startLogin();
   });
   ipcMain.handle('getAuthStatus', async () => {
-    return { signedIn: !!authStore.getAccessToken() || !!authStore.loadPersistedRefreshToken() };
+    const signedIn = !!authStore.getAccessToken() || !!authStore.loadPersistedRefreshToken();
+    // The JWT contract (contracts/asymbl-jwt-claims.yaml) only carries
+    // `email`, no display name or photo - decoding client-side is fine here
+    // since this is display-only, not a trust boundary (every real API call
+    // is verified server-side regardless of what the UI shows).
+    let email = null;
+    const accessToken = authStore.getAccessToken();
+    if (accessToken) {
+      try {
+        const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf-8'));
+        email = payload.email ?? null;
+      } catch (error) {
+        console.error('Failed to decode access token for display:', error.message);
+      }
+    }
+    return { signedIn, email };
   });
 
   // Spec B F3: token refresh + heartbeat. Access tokens are a 15-min TTL

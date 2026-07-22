@@ -9,9 +9,22 @@
 // (macOS) or the second-instance argv (Windows/Linux, since a custom-protocol
 // launch on those platforms starts a new process that Electron's single-
 // instance lock redirects into the existing one).
-const { app, shell } = require('electron');
+const { app, shell, BrowserWindow } = require('electron');
 const authStore = require('./auth-store');
 const { CONTROL_PLANE_URL } = require('./control-plane-client');
+
+/** Notifies every open window to re-check auth status, independent of
+ * whether a startLogin() promise happens to still be pending - fixes a real
+ * bug where a callback arriving with no pending promise (e.g. the renderer
+ * reloaded mid-flow, or the callback is delivered by the OS after the
+ * click handler's timeout) left the UI stuck showing signed-out forever. */
+function notifyAuthStatusChanged() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('auth-status-changed');
+    }
+  }
+}
 
 const PROTOCOL = 'asymbl-recall';
 const CALLBACK_HOST = 'auth-callback';
@@ -52,6 +65,7 @@ function handleCallbackUrl(callbackUrl) {
 
   authStore.setTokens({ access_token: accessToken, refresh_token: refreshToken });
   settlePendingLogins({ status: 'success' });
+  notifyAuthStatusChanged();
 }
 
 function settlePendingLogins(result) {

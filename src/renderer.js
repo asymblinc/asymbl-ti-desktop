@@ -29,10 +29,28 @@ async function refreshAuthUi() {
   if (!signInBtn || !userAvatar) {
     return;
   }
-  const { signedIn } = await window.electronAPI.getAuthStatus();
+  const { signedIn, email } = await window.electronAPI.getAuthStatus();
   signInBtn.style.display = signedIn ? 'none' : 'block';
   userAvatar.style.display = signedIn ? 'flex' : 'none';
+  // The JWT only carries email, no display name/photo (contracts/
+  // asymbl-jwt-claims.yaml) - initials + a hover tooltip is the honest
+  // version of "show who's signed in" available today; a real name/photo
+  // needs the SF identity fetch + JWT contract extended first.
+  if (signedIn && email) {
+    userAvatar.title = email;
+    userAvatar.textContent = email[0].toUpperCase();
+  } else {
+    userAvatar.removeAttribute('title');
+    userAvatar.textContent = '';
+  }
 }
+
+// Pushed by the main process whenever tokens change (sign-in callback,
+// sign-out) - decoupled from whether a startLogin() promise is still
+// pending, which is what left the UI stuck signed-out before this fix.
+window.electronAPI.onAuthStatusChanged?.(() => {
+  refreshAuthUi();
+});
 
 // Group past meetings by date
 let pastMeetingsByDate = {};
@@ -1242,6 +1260,14 @@ const sdkLogger = {
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('DOM content loaded, loading data from file...');
 
+  // A raw <img src="./assets/..."> path 404s against the webpack dev server -
+  // electron-forge's webpack plugin only rewrites asset URLs that are
+  // require()'d from JS, not ones referenced directly in static HTML.
+  const appLogo = document.getElementById('appLogo');
+  if (appLogo) {
+    appLogo.src = require('./assets/asymbl-icon.png');
+  }
+
   // Initialize the SDK Logger
   sdkLogger.init();
 
@@ -1268,7 +1294,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const result = await window.electronAPI.startLogin();
       if (result.status !== 'success') {
         console.error('Sign-in failed:', result.error);
-        signInBtn.textContent = 'Sign in with Salesforce';
+        signInBtn.textContent = 'Sign in with Asymbl';
       }
       signInBtn.disabled = false;
       await refreshAuthUi();
