@@ -21,6 +21,7 @@ const capturePolicyClient = require('./capture-policy-client');
 const notesSync = require('./notes-sync');
 const updater = require('./updater');
 const telemetry = require('./telemetry');
+const tray = require('./tray');
 
 let cachedTenantId = null; // set once fetchBootstrap succeeds (Spec B F10-R9's telemetry events carry tenant_id)
 
@@ -215,6 +216,7 @@ app.whenReady().then(() => {
 
   createWindow();
   updater.initUpdater(mainWindow);
+  tray.initTray(mainWindow);
 
   // When the window is ready, send the initial meeting detection status
   mainWindow.webContents.on('did-finish-load', () => {
@@ -742,6 +744,7 @@ function initSDK() {
       activeRecordings.addRecording(window.id, noteId, window.platform || 'unknown');
     }
     updater.setRecordingActive(true); // F10-R4: never force-restart mid-recording
+    tray.setRecordingActive(true);
   });
 
   RecallAiSdk.addEventListener('recording-ended', async evt => {
@@ -753,6 +756,7 @@ function initSDK() {
     console.log("Recording stopped for window:", window.id);
     activeRecordings.removeRecording(window.id);
     updater.setRecordingActive(false);
+    tray.setRecordingActive(false);
   });
 
   // Listen for real-time transcript events
