@@ -6,9 +6,10 @@
 :root {
   --primary-bg: #fafbfd;
   --card-bg: #fff;
-  --light-purple: #f3e9ff;
-  --light-green: #e8f5e9;
-  --border-color: #e0e0e0;
+  /* Screen 02 pixel-fidelity audit, 2026-07-23: matches tokens.css's
+     --paper-edge exactly (the design system's canonical hairline-border
+     color) - was #e0e0e0, a pre-brand-system legacy value, before this. */
+  --border-color: #dfe3ee;
   --text-primary: #000;
   --text-secondary: #666;
   --sidebar-width: 320px;
@@ -714,7 +715,9 @@ body {
 
 .home-rail {
   border-left: 1px solid var(--border-color);
-  background: #f7f8fb;
+  /* home.jsx's right rail is explicitly var(--paper-2) (#f4f6fb) - was
+     approximated as #f7f8fb before the direct MCP color audit. */
+  background: #f4f6fb;
   padding: 20px 18px;
   min-height: 100%;
 }

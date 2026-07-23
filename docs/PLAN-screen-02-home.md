@@ -50,6 +50,62 @@ Earlier pixel-fidelity passes worked from local mirrored files (`/Downloads/TI R
 - `CLAUDE-CODE-HANDOFF.md` §12 - the file's own precedence comment already in `index.css` (line 16-22) says this doc's colors override the canvas's ("older warm/cream, to be replaced"). §12.1's token block pins `--asy-grad-indigo: linear-gradient(0deg,#191D47,#2C1169)` - **0deg**, not tokens.css's 160deg. First attempted a "fix" toward 160deg (tokens.css value) before reading this doc; reverted immediately once the authoritative override was confirmed - `--brand-grad-indigo` stays at 0deg, matching what was already correct in the code before this pass.
 - Confirmed via `list_files` that the project's `desktop/home.jsx` and `screen-specs/02-home-today.md` are byte-identical in structure/size to the local Downloads mirror this build was actually developed against - the local reference files were accurate, not stale.
 
+## 6a-0.5. Full component / color / button / animation audit (2026-07-23)
+
+Comprehensive pass against `desktop/home.jsx`, `tokens.css`, and `CLAUDE-CODE-HANDOFF.md` §12 via the `claude_design` MCP - not a spot-check. Two more real color drifts found beyond the amber/blue fix (§6a-0):
+
+### Color audit (every `--brand-*` token + every literal hex in the new CSS)
+
+| Token / value | This build | Canonical source | Result |
+|---|---|---|---|
+| `--border-color` | was `#e0e0e0` (pre-brand-system legacy) | `tokens.css --paper-edge: #dfe3ee` | **Fixed** - global token, ~25 usages across `index.css`/`popover.css` (every hairline/divider/card border in the whole app, not just screen 02) |
+| `.home-rail` background | was `#f7f8fb` (approximated) | `home.jsx`: `background: 'var(--paper-2)'` = `#f4f6fb` | **Fixed** |
+| `.home-avatar` text (`#024a82`) | as built | `tokens.css --accent-ink: #024a82` | Exact match |
+| chip/pill blue ink (`#0273c4`) | fixed in §6a-0 | `tokens.css --blue: #0273c4` | Exact match |
+| chip/pill amber ink (`#a36d00`) | fixed in §6a-0 | `tokens.css --amber: #a36d00` | Exact match |
+| green ink (`#068a4f`), rec-bg (`#fde7e7`), tint-blue/yellow/green/purple/pink, `--brand-purple`/`-pink`/`-green`/`-yellow`/`-orange`/`-record-red`, all three 90deg gradients | as built | `CLAUDE-CODE-HANDOFF.md` §12.1 (authoritative over the canvas per its own precedence rule) | Exact match, no drift found |
+| `--brand-grad-indigo` direction | `0deg` (unchanged) | `CLAUDE-CODE-HANDOFF.md` §12.1 pins `0deg`; `tokens.css`'s `160deg` is the superseded canvas value | Confirmed correct as-is (see §6a-0 - a "fix" toward 160deg was caught and reverted) |
+| hero overlay rgbas (kicker `0.65`, mode-pill bg `0.14`, sub `0.7`) | as built | `home.jsx` literal values | Exact match |
+| `.meeting-card:hover` bg (`#f9fafc`) | as built | not specified (static mockup has no hover state) | Reasonable implementation judgment, not a drift |
+| Cleanup: `--light-purple`/`--light-green` root tokens | removed from `index.css` | - | Dead - only consumer was the `.meeting-icon.calendar`/`.document` rules already deleted this pass; a separate copy still lives in `src/pages/note-editor/styles.css`'s own `:root`, untouched |
+
+### Component checklist (`home.jsx` → this build)
+
+| Design component | Built as | Status |
+|---|---|---|
+| Header (wordmark, search+⌘K, New capture) | Reused app-level `.header` (restyled light, not duplicated - see §1) | Done |
+| 02b live-recording strip (pulse, mono timer, title, sub, 5-bar waveform, Open capture, Stop & save) | `#homeLiveStrip` | Done, real IPC-driven |
+| Greeting + date | `#homeGreeting`/`#homeDate` | Done, real (schedule-length-driven copy) |
+| Up-next hero (kicker, mode pill, avatar, title/sub, Open Pre-Brief) | `#homeHero` | Done; mode pill fixed to "You capture" (no capture-policy service yet); Pre-Brief honest no-op |
+| Today's schedule rows (time/LIVE, avatar, title/sub, duration+platform, mode pill) | `#homeScheduleList` | Done, real SF Event data |
+| Recent captures (avatar, title, sub, sync chip) | Notes list (`createMeetingCard`, retitled - see §6a "redundant Notes list") | Done, real local data |
+| Right rail: Needs attention | `#homeAttentionList` | Done for 2/5 queue types (real data); other 3 have no backing service anywhere in this app (TODOS.md #11) |
+| Right rail: This week (4 stats) | `#homeStatsGrid` | Done; 2/4 real, 2/4 honestly `—` (not tracked anywhere) |
+| Right rail: Connection status | `#homeConnectionCard` | Done, real SF-token + mic-permission checks |
+
+### Button/action checklist (every clickable element → real handler or documented placeholder)
+
+| Element | Wired to | Real or placeholder |
+|---|---|---|
+| Header "New capture" | `createNewMeeting()` | Real |
+| Header "Record {platform}" | existing join-detected flow | Real (pre-existing); now only shown once a meeting is detected |
+| Header search | `renderNotesInto` substring filter | Real (pre-existing) |
+| Hero "Open Pre-Brief" | `console.log` no-op | Documented placeholder (#22/#23 not built - matches the tray's identical `openPreBrief` decision) |
+| Empty-schedule "New capture" | `createNewMeeting()` | Real |
+| Empty-schedule "Connect calendar" | `console.log` no-op | Documented placeholder (TODOS.md #13) |
+| Attention "waiting to sync" row | new `retryNoteSync` IPC | Real |
+| Attention "speakers need labels" row | `showEditorView` (opens the note) | Real navigation; no inline relabel UI exists yet (only C5's post-call relabel is speced, not built - not a screen-02 regression, just an honest boundary) |
+| Recent-capture row click | `showEditorView` | Real (pre-existing) |
+| "Library →" link | scrolls to the notes list | Real scroll; no separate Library screen exists yet (#27) |
+| 02b "Open capture" | `showEditorView` on the live note | Real |
+| 02b "Stop & save" | `stopManualRecording` IPC | Real |
+| Note delete button | `deleteMeeting` | Real (pre-existing, untouched) |
+
+### Animation/motion checklist
+
+- `.recall-pulse` and `.recall-wave-bar` keyframes in `index.css` are byte-identical (timing, easing, scale/opacity values) to `tokens.css`'s own `@keyframes recall-pulse`/`recall-wave` definitions - confirmed by direct comparison, not assumed.
+- No GIFs anywhere in `desktop/home.jsx` or this build - confirmed by reading the source file directly; the original goal's "gifs" mention doesn't apply to this specific screen.
+
 ## 6a. Post-build pixel-fidelity pass (2026-07-23, live-screenshot review)
 
 The first pass rendered correctly but was flagged against the design as "not pixel perfect" via direct screenshots of the running app (both the real signed-in app and the Claude Design canvas reference). Fixed in this pass:
