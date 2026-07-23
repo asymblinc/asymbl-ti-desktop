@@ -1,0 +1,224 @@
+/* Screen 01b/01c - Meeting notification panel (task #37).
+   Token translation from desktop/meeting-notification.jsx (design source):
+   --ink -> --brand-ink-navy, --ink-2/3 -> --brand-slate, --ink-4/5/6 -> --brand-gray,
+   --paper -> --brand-white, --accent -> --brand-blue, --shadow-window -> --brand-shadow-window
+   (exact existing token, see index.css). No new CSS variables invented. */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--brand-font);
+}
+
+.notif-panel {
+  width: 430px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 14px;
+  box-shadow: var(--brand-shadow-window);
+  border: 0.5px solid rgba(25, 29, 71, 0.08);
+  overflow: hidden;
+  /* Slide-in from right + fade, per spec section 3 - 240ms ease-out. */
+  animation: notifSlideIn 240ms ease-out;
+}
+
+@keyframes notifSlideIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.notif-pill {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+}
+
+.notif-accent-bar {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--brand-blue);
+  flex-shrink: 0;
+}
+
+/* Matches .home-avatar (index.css) exactly - this app already settled on a
+   single blue-tint avatar style rather than the design mock's per-name tone
+   system (coral/sage/sky), consistent with that earlier simplification. */
+.notif-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--brand-tint-blue);
+  color: #024a82;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.notif-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notif-subline {
+  font-size: 11px;
+  color: var(--brand-gray);
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.notif-subline .notif-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--brand-gray);
+  flex-shrink: 0;
+}
+
+.notif-subline .notif-live {
+  color: var(--brand-blue);
+  font-weight: 600;
+}
+
+.notif-split-btn {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.notif-start-btn {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--brand-blue);
+  border: none;
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.notif-start-btn:hover { filter: brightness(1.08); }
+
+.notif-chevron-btn {
+  padding: 8px 7px;
+  background: var(--brand-blue);
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.notif-chevron-btn:hover { filter: brightness(1.08); }
+
+.notif-expand {
+  border-top: 1px solid rgba(25, 29, 71, 0.06);
+}
+
+.notif-teaser {
+  padding: 10px 14px 11px;
+  border-bottom: 1px solid rgba(25, 29, 71, 0.06);
+}
+.notif-teaser-text {
+  font-size: 11.5px;
+  color: var(--brand-slate);
+  line-height: 1.5;
+}
+.notif-teaser-text strong {
+  color: var(--brand-ink-navy);
+}
+.notif-chips {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.notif-chip {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 3px 8px;
+  background: var(--brand-tint-blue);
+  color: var(--brand-blue);
+  border-radius: 999px;
+}
+
+.notif-dropdown {
+  padding: 5px 6px 7px;
+}
+.notif-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.notif-row:hover:not(.notif-row-disabled) {
+  background: rgba(25, 29, 71, 0.05);
+}
+.notif-row-disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.notif-row-icon {
+  color: var(--brand-gray);
+  flex-shrink: 0;
+}
+.notif-row-text {
+  flex: 1;
+  min-width: 0;
+}
+.notif-row-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand-slate);
+}
+.notif-row-sub {
+  font-size: 10.5px;
+  color: var(--brand-gray);
+  margin-top: 1px;
+}
+.notif-kbd {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--brand-gray);
+  background: rgba(25, 29, 71, 0.06);
+  border-radius: 4px;
+  padding: 2px 5px;
+  flex-shrink: 0;
+}
+
+.notif-consent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 3px;
+  font-size: 10.5px;
+  color: var(--brand-gray);
+}
+.notif-consent-icon {
+  color: var(--brand-gray);
+  flex-shrink: 0;
+}

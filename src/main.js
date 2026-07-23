@@ -22,6 +22,7 @@ const notesSync = require('./notes-sync');
 const updater = require('./updater');
 const telemetry = require('./telemetry');
 const tray = require('./tray');
+const meetingNotificationWindow = require('./meeting-notification-window');
 
 let cachedTenantId = null; // set once fetchBootstrap succeeds (Spec B F10-R9's telemetry events carry tenant_id)
 
@@ -406,6 +407,39 @@ app.whenReady().then(() => {
     joinDetected: () => joinDetectedMeeting(),
   });
 
+  // Screen 01b/01c (task #37) - same reused-function pattern as
+  // joinDetected above: Start capture calls the exact same join logic, not
+  // a duplicate. sendBot/openPreBrief are honest no-ops today - neither has
+  // a real backend/screen to route to yet (see docs/implementation-01b-
+  // meeting-notification.md section 2), the renderer already disables both
+  // rows, this is a defensive fallback, not the primary gate.
+  meetingNotificationWindow.registerNotificationActionHandlers({
+    startCapture: () => joinDetectedMeeting(),
+    sendBot: () => ({ success: false, error: 'Not available yet' }),
+    openPreBrief: () => { focusMainWindowFromTray(); return { success: false, error: 'Pre-Brief isn’t built yet' }; },
+    remindLater: () => {
+      const meetingUrl = detectedMeeting?.window?.url || null;
+      const snapshot = detectedMeeting;
+      // Spec section 5: "hides, re-arms in 2 min" - only re-shows if this is
+      // still the same detected meeting and it hasn't started recording.
+      // Re-shows the panel directly (buildMeetingNotificationPayload) rather
+      // than trying to re-trigger the SDK's own event - the SDK has no
+      // public API for that, and faking one would be worse than just
+      // reusing the same payload-building logic the initial show already uses.
+      setTimeout(() => {
+        if (detectedMeeting === snapshot && detectedMeeting && !currentRecordingWindowId) {
+          const platformName = PLATFORM_NAMES[detectedMeeting.window.platform] || detectedMeeting.window.platform;
+          meetingNotificationWindow.showMeetingNotification(buildMeetingNotificationPayload(detectedMeeting, platformName));
+        }
+      }, 2 * 60 * 1000);
+      return { success: true, meetingUrl };
+    },
+    dontCapture: () => {
+      meetingNotificationWindow.suppressMeeting(detectedMeeting?.window?.url || null);
+      return { success: true };
+    },
+  });
+
   function focusMainWindowFromTray() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -750,6 +784,37 @@ async function finalizeDesktopRecordingSession(windowId) {
   });
 }
 
+// Screen 01b/01c (task #37) - shared with the remindLater re-show handler
+// (tray.initTray's meetingNotificationWindow.registerNotificationActionHandlers
+// call), so both build the exact same payload shape rather than duplicating it.
+const PLATFORM_NAMES = {
+  zoom: 'Zoom',
+  'google-meet': 'Google Meet',
+  slack: 'Slack',
+  teams: 'Microsoft Teams',
+};
+
+function buildMeetingNotificationPayload(evt, platformName) {
+  // Title/personName aren't known yet at meeting-detected time (SDK only
+  // reliably populates those on meeting-updated, per that listener's own
+  // comment below) - platform-generic title is the honest fallback the
+  // spec itself describes for an unlinked/ad-hoc meeting ("neutral glyph,
+  // title from window/URL").
+  return {
+    meetingUrl: evt.window.url || null,
+    personName: null,
+    title: `${platformName} meeting`,
+    timeLabel: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+    platformLabel: platformName,
+    liveStatus: 'starting now',
+    teaser: null,
+    chips: [],
+    // control-plane's jurisdiction is hardcoded 'one_party' today (F6-R8
+    // gap, capture-policy-handler.ts) - always hidden, not a bug here.
+    consentNoticeText: null,
+  };
+}
+
 // Initialize the Recall.ai SDK
 function initSDK() {
   console.log("Initializing Recall.ai SDK");
@@ -789,38 +854,12 @@ function initSDK() {
     detectedMeeting = evt;
     tray.setMeetingDetected(true, evt.window.platform);
 
-    // Map platform codes to readable names
-    const platformNames = {
-      'zoom': 'Zoom',
-      'google-meet': 'Google Meet',
-      'slack': 'Slack',
-      'teams': 'Microsoft Teams'
-    };
-
     // Get a user-friendly platform name, or use the raw platform name if not in our map
-    const platformName = platformNames[evt.window.platform] || evt.window.platform;
+    const platformName = PLATFORM_NAMES[evt.window.platform] || evt.window.platform;
 
-    // Granola-style prompt: click the notification (or its Record action,
-    // macOS-only - Electron doesn't render notification action buttons on
-    // Windows/Linux, so the click-anywhere handler below is the reliable
-    // cross-platform path either way) to open the app and start recording
-    // immediately, same as clicking the "Record Meeting" button by hand.
-    let notification = new Notification({
-      title: 'Start recording this meeting?',
-      body: `${platformName} meeting detected — click to record`,
-      actions: [{ type: 'button', text: 'Record' }]
-    });
-
-    notification.on('click', () => {
-      console.log("Notification clicked for platform:", platformName);
-      joinDetectedMeeting();
-    });
-    notification.on('action', () => {
-      console.log("Notification 'Record' action clicked for platform:", platformName);
-      joinDetectedMeeting();
-    });
-
-    notification.show();
+    // Screen 01b/01c (task #37): the real designed pill/dropdown panel,
+    // replacing the generic native Notification this used to show.
+    meetingNotificationWindow.showMeetingNotification(buildMeetingNotificationPayload(evt, platformName));
 
     // Send the meeting detected status to the renderer process
     if (mainWindow && !mainWindow.isDestroyed()) {

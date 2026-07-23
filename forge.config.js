@@ -78,6 +78,19 @@ module.exports = {
                 js: './src/popover-preload.js',
               },
             },
+            {
+              // Screen 01b/01c (meeting-notification panel) - replaces the
+              // generic native Electron Notification shown on meeting-
+              // detected with the real designed pill/dropdown (task #37).
+              // Own preload, same pattern as popover_window - exposes only
+              // the 4 dropdown actions, nothing else.
+              html: './src/meeting-notification.html',
+              js: './src/meeting-notification-renderer.js',
+              name: 'notification_window',
+              preload: {
+                js: './src/meeting-notification-preload.js',
+              },
+            },
           ],
         },
       },
