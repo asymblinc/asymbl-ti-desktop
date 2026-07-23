@@ -93,14 +93,24 @@ function wireSignInButton(btn, defaultLabel) {
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     labelEl.textContent = 'Signing in...';
-    const result = await window.electronAPI.startLogin();
-    if (result.status !== 'success') {
-      console.error('Sign-in failed:', result.error);
-      showToast(signInErrorMessage(result.error, result.lockedReason));
+    // try/finally (real gap found via code review, 2026-07-23): a rejected
+    // startLogin() promise used to leave the button permanently disabled
+    // showing "Signing in..." forever, with no error surfaced.
+    try {
+      const result = await window.electronAPI.startLogin();
+      if (result.status !== 'success') {
+        console.error('Sign-in failed:', result.error);
+        showToast(signInErrorMessage(result.error, result.lockedReason));
+        labelEl.textContent = defaultLabel;
+      }
+    } catch (error) {
+      console.error('Sign-in threw:', error);
+      showToast(signInErrorMessage());
       labelEl.textContent = defaultLabel;
+    } finally {
+      btn.disabled = false;
+      await refreshAuthUi();
     }
-    btn.disabled = false;
-    await refreshAuthUi();
   });
 }
 
@@ -537,7 +547,11 @@ function createMeetingCard(meeting) {
     ? '<span class="home-chip tone-amber">Local</span>'
     : '<span class="home-chip tone-green">Synced</span>';
 
-  card.innerHTML = `
+  // meeting.title is externally-influenced (calendar/window-title data) -
+  // sanitize the same way every other innerHTML assignment in this file
+  // does (markdown preview, transcript, home lists). Real gap found via
+  // code review, 2026-07-23: this was the one innerHTML site missing it.
+  card.innerHTML = DOMPurify.sanitize(`
     <div class="home-avatar">${homeInitials(meeting.title)}</div>
     <div class="meeting-content">
       <span class="meeting-title">${titleHtml}</span>
@@ -551,7 +565,7 @@ function createMeetingCard(meeting) {
         </svg>
       </button>
     </div>
-  `;
+  `);
 
   return card;
 }

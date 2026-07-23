@@ -55,10 +55,15 @@ function handleCallbackUrl(callbackUrl) {
   if (parsed.protocol !== `${PROTOCOL}:`) {
     return;
   }
-  const provider = CALLBACK_HOSTS[parsed.hostname];
-  if (!provider) {
+  // Object.hasOwn guard (code review finding, 2026-07-23): parsed.hostname
+  // comes from an OS-delivered custom-protocol URL, which any external
+  // actor able to trigger asymbl-recall:// links can craft - a plain `{}`
+  // lookup would let a hostname like "constructor" or "toString" resolve
+  // to an inherited Object.prototype value instead of failing the allowlist.
+  if (!Object.hasOwn(CALLBACK_HOSTS, parsed.hostname)) {
     return;
   }
+  const provider = CALLBACK_HOSTS[parsed.hostname];
 
   const error = parsed.searchParams.get('error');
   if (error) {

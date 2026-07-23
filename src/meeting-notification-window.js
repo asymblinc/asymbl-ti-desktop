@@ -7,6 +7,10 @@
 const { BrowserWindow, screen, ipcMain } = require('electron');
 
 let notificationWindow = null;
+// Resolves once the current notificationWindow's renderer has actually
+// registered its IPC listener - see showMeetingNotification for why this
+// matters (real race found via code review, 2026-07-23).
+let windowReadyPromise = null;
 let onActionCallback = null;
 // Session-lifetime only (not persisted to disk/DB) - matches the spec's
 // "re-arms once" scope for suppression, which doesn't need to survive an
@@ -31,12 +35,17 @@ function ensureNotificationWindow() {
     resizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    // focusable: false - never steals focus (hover/click still work via
-    // mouse events; only keyboard *activation* is blocked, which is exactly
-    // what "the user is about to join a call, don't yank focus" needs).
-    // Researched via Perplexity (2026-07-23): showInactive() + this
-    // combination is the current, non-deprecated pattern.
-    focusable: false,
+    // focusable defaults to true (real bug found via code review,
+    // 2026-07-23): the original `focusable: false` here was based on a
+    // misreading of its actual effect - it calls macOS's
+    // setDisableKeyOrMainWindow, which blocks the window from EVER becoming
+    // key and receiving ANY keyboard events, not just "activation". That
+    // silently broke the R/D keyboard shortcuts wired in
+    // meeting-notification-renderer.js's keydown listener - they could
+    // never fire. showInactive() below is what actually satisfies "don't
+    // steal focus on appear" (it shows without activating); focusable only
+    // controls whether the window CAN later become key on click/interaction,
+    // which the shortcuts require.
     backgroundColor: '#00000000',
     webPreferences: {
       preload: NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY,
@@ -45,6 +54,9 @@ function ensureNotificationWindow() {
       sandbox: true,
       webSecurity: true,
     },
+  });
+  windowReadyPromise = new Promise((resolve) => {
+    notificationWindow.webContents.once('did-finish-load', resolve);
   });
   notificationWindow.loadURL(NOTIFICATION_WINDOW_WEBPACK_ENTRY);
   // 'screen-saver' level + visibleOnFullScreen: true is the researched
@@ -83,11 +95,20 @@ function positionWindow(win) {
 // indistinguishable from not checking at all, so this is left genuinely
 // unimplemented rather than faked - logged in TODOS.md, not silently dropped.
 
-function showMeetingNotification(meetingData) {
+async function showMeetingNotification(meetingData) {
   if (suppressedMeetingUrls.has(meetingData.meetingUrl)) return;
   const win = ensureNotificationWindow();
   positionWindow(win);
   win.setBounds({ ...win.getBounds(), height: COLLAPSED_HEIGHT }, false);
+  // Real race found via code review, 2026-07-23: on a freshly-created
+  // window, loadURL() hasn't finished by the time this runs, so the
+  // renderer's IPC listener (meeting-notification-renderer.js's onMeeting)
+  // isn't registered yet - webContents.send() doesn't queue for a listener
+  // that arrives later, it's just dropped, leaving the panel blank on the
+  // very first notification after app launch. Awaiting did-finish-load
+  // (already resolved for a reused window - see ensureNotificationWindow)
+  // closes that gap without affecting the reused-window path.
+  await windowReadyPromise;
   win.webContents.send('notification:meeting', meetingData);
   // showInactive(), never show() - the whole point is not stealing focus
   // from the meeting app the user is joining.

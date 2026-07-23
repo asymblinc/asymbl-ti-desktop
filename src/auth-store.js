@@ -103,8 +103,15 @@ function clearTokens(provider = 'sf') {
   delete tokens[provider];
   try {
     fs.unlinkSync(refreshTokenPath(provider));
-  } catch {
-    // no-op: file may not exist
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      // Real gap found via code review, 2026-07-23: a blanket no-op catch
+      // here let clearTokens() report success even when the refresh-token
+      // file failed to delete for a real reason (permissions, disk issue) -
+      // a logout caller has no way to know the credential is still on disk.
+      console.error(`Failed to remove persisted refresh token (${provider}):`, error.message);
+      throw error;
+    }
   }
   if (provider === 'sf') {
     photoDataUri = null;
