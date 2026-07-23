@@ -120,7 +120,7 @@ async function refreshAuthUi() {
   if (!signInBtn || !userAvatar) {
     return;
   }
-  const { signedIn, email, photoDataUri, orgId, orgName } = await window.electronAPI.getAuthStatus();
+  const { signedIn, email, photoDataUri, orgId, orgName, orgIsSandbox } = await window.electronAPI.getAuthStatus();
   window.isSignedIn = signedIn;
   window.currentUserEmail = email || null;
   if (typeof renderHomeConnection === 'function') {
@@ -207,10 +207,24 @@ async function refreshAuthUi() {
       userMenuOrg.style.display = '';
       userMenuOrg.innerHTML = '';
       if (orgName) {
-        const nameEl = document.createElement('div');
+        const nameRow = document.createElement('div');
+        nameRow.className = 'user-menu-org-name-row';
+        // Same cloud glyph as the sign-in screen's "Continue with Salesforce"
+        // button (auth-gate-btn-primary) - one Salesforce icon, reused, not
+        // a second one invented for this row.
+        nameRow.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="user-menu-org-icon"><path d="M2.5 9.5a2.5 2.5 0 0 1 4-2 3 3 0 0 1 5.5 1 2 2 0 0 1 .5 4H4.5a2 2 0 0 1-2-2.5z"/></svg>';
+        const nameEl = document.createElement('span');
         nameEl.className = 'user-menu-org-name';
         nameEl.textContent = orgName;
-        userMenuOrg.appendChild(nameEl);
+        nameRow.appendChild(nameEl);
+        if (orgIsSandbox) {
+          const badge = document.createElement('span');
+          badge.className = 'home-chip tone-amber';
+          badge.textContent = 'Sandbox';
+          nameRow.appendChild(badge);
+        }
+        userMenuOrg.appendChild(nameRow);
       }
       if (orgId) {
         const idEl = document.createElement('div');

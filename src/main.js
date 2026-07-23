@@ -181,6 +181,7 @@ app.whenReady().then(() => {
     // falls back to showing just the org ID when it is.
     let orgId = null;
     let orgName = null;
+    let orgIsSandbox = null;
     const accessToken = authStore.getAccessToken();
     if (accessToken) {
       try {
@@ -188,6 +189,7 @@ app.whenReady().then(() => {
         email = payload.email ?? null;
         orgId = payload.sf_org ?? null;
         orgName = payload.sf_org_name ?? null;
+        orgIsSandbox = payload.sf_is_sandbox ?? null;
       } catch (error) {
         console.error('Failed to decode access token for display:', error.message);
       }
@@ -196,7 +198,7 @@ app.whenReady().then(() => {
     // every login by control-plane (sf-oauth.ts), persisted here, falls
     // back to null (renderer shows initials) if the SF user has none set.
     const photoDataUri = authStore.getPhotoDataUri();
-    return { signedIn, email, photoDataUri, orgId, orgName };
+    return { signedIn, email, photoDataUri, orgId, orgName, orgIsSandbox };
   });
   ipcMain.handle('signOut', async () => {
     authStore.clearTokens();

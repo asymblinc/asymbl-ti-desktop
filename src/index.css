@@ -357,6 +357,15 @@ body {
 .user-menu-org {
   padding: 8px 10px 2px;
 }
+.user-menu-org-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.user-menu-org-icon {
+  color: var(--brand-blue);
+  flex-shrink: 0;
+}
 .user-menu-org-name {
   font-size: 13px;
   font-weight: 600;
