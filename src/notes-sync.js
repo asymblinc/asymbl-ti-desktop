@@ -54,4 +54,11 @@ async function syncNote(meetingId, notesSessionId, content) {
   }
 }
 
-module.exports = { syncNote };
+// Screen 02 (Home/Today §2.6) "Waiting to sync" queue - the only real,
+// already-tracked signal for that queue type (see docs/screen-specs/02-home-today.md
+// §12: the other 4 needs-attention queue types have no backing data source yet).
+function getPendingSyncMeetingIds() {
+  return [...pendingRetries.keys()];
+}
+
+module.exports = { syncNote, getPendingSyncMeetingIds };

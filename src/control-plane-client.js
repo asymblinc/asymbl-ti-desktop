@@ -156,4 +156,25 @@ async function fetchNextEvent() {
   }
 }
 
-module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, fetchBootstrap, fetchNextEvent, CONTROL_PLANE_URL };
+/**
+ * Screen 02 (Home/Today, docs/screen-specs/02-home-today.md §2.4) "Today's
+ * schedule" list - same SF Event source as fetchNextEvent, just the rest of
+ * today instead of a single next row.
+ */
+async function fetchTodaySchedule() {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) {
+    return { status: 'error', message: 'Not signed in' };
+  }
+  try {
+    const response = await axios.get(`${CONTROL_PLANE_URL}/api/ti/desktop/today-schedule`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000,
+    });
+    return { status: 'success', schedule: response.data.schedule };
+  } catch (error) {
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, fetchBootstrap, fetchNextEvent, fetchTodaySchedule, CONTROL_PLANE_URL };

@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   navigate: (page) => ipcRenderer.send('navigate', page),
   saveMeetingsData: (data) => ipcRenderer.invoke('saveMeetingsData', data),
   loadMeetingsData: () => ipcRenderer.invoke('loadMeetingsData'),
+  getPendingSyncMeetingIds: () => ipcRenderer.invoke('getPendingSyncMeetingIds'),
+  retryNoteSync: (meetingId) => ipcRenderer.invoke('retryNoteSync', meetingId),
+  getMicPermissionStatus: () => ipcRenderer.invoke('getMicPermissionStatus'),
   deleteMeeting: (meetingId) => ipcRenderer.invoke('deleteMeeting', meetingId),
   generateMeetingSummary: (meetingId) => ipcRenderer.invoke('generateMeetingSummary', meetingId),
   generateMeetingSummaryStreaming: (meetingId) => ipcRenderer.invoke('generateMeetingSummaryStreaming', meetingId),
@@ -39,5 +42,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAuthStatus: () => ipcRenderer.invoke('getAuthStatus'),
   signOut: () => ipcRenderer.invoke('signOut'),
   onAuthStatusChanged: (callback) => ipcRenderer.on('auth-status-changed', () => callback()),
-  onTriggerNewNote: (callback) => ipcRenderer.on('trigger-new-note', () => callback())
+  onTriggerNewNote: (callback) => ipcRenderer.on('trigger-new-note', () => callback()),
+  onTodayScheduleUpdated: (callback) => ipcRenderer.on('today-schedule-updated', (_, schedule) => callback(schedule))
 });

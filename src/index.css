@@ -97,11 +97,12 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  /* #022D60 (owner-specified brand navy) - white text/icons on it measure
-     ~13.6:1 contrast, well past WCAG AA's 4.5:1 minimum (previously
-     #0277d6, chosen for the same reason at 4.55:1 - superseded). */
-  background-color: #022D60;
-  border-bottom: 1px solid rgba(25, 29, 71, 0.12);
+  /* Screen 02 (Home/Today) pixel-fidelity pass, 2026-07-23: design's header
+     is white/light, not the navy bar this used to be - ink-navy text on
+     white is ~15:1 contrast, well past WCAG AA, so no accessibility
+     regression from the earlier navy+white-text scheme it replaces. */
+  background-color: var(--brand-white);
+  border-bottom: 1px solid var(--border-color);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -138,19 +139,19 @@ body {
 .app-brand-name {
   font-size: 15px;
   font-weight: 700;
-  color: var(--brand-white);
+  color: var(--brand-ink-navy);
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
-.app-logo {
-  /* Floating/3D look so the icon reads clearly against the darker navy
-     header (#022D60): a thin light ring to separate the icon's own edges
-     from the background, plus a soft drop shadow to lift it off the header. */
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.35),
-    0 2px 4px rgba(0, 0, 0, 0.35),
-    0 4px 10px rgba(0, 0, 0, 0.25);
+.app-brand-by {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand-gray);
+  white-space: nowrap;
+}
+.app-brand-dot {
+  color: var(--brand-record-red);
 }
 
 .header-center {
@@ -163,14 +164,15 @@ body {
   position: relative;
   display: flex;
   align-items: center;
+  background-color: #f4f6fb;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
 }
 
 .search-icon {
   position: absolute;
-  left: 10px;
-  /* Sits on the search input's white fill now, not the blue header bar
-     directly - brand-slate (#5B6070) on white is 5.6:1, passes AA. */
-  color: var(--brand-slate);
+  left: 12px;
+  color: var(--brand-gray);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -178,29 +180,36 @@ body {
 
 .search-input {
   width: 100%;
-  padding: 8px 8px 8px 35px;
-  border-radius: var(--brand-r-sm);
-  border: 1px solid transparent;
-  /* Solid white, not an off-white tint - this sits on a blue header now and
-     needs a hard, unambiguous boundary + max contrast for its own text. */
-  background-color: var(--brand-white);
-  font-size: 14px;
+  padding: 8px 8px 8px 34px;
+  border-radius: 999px;
+  border: none;
+  background-color: transparent;
+  font-size: 13px;
   font-family: var(--brand-font);
   color: var(--brand-ink-navy);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: box-shadow 0.15s ease;
   -webkit-app-region: no-drag; /* Make input not draggable to allow text selection */
 }
 
 .search-input::placeholder {
-  /* Explicit, not the browser default (~50% opacity of the text color,
-     which reads too faint - user-reported "search text" contrast issue). */
-  color: var(--brand-slate);
+  color: var(--brand-gray);
   opacity: 1;
 }
 
 .search-input:focus {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6);
+}
+
+.search-kbd {
+  flex-shrink: 0;
+  margin-right: 6px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+  font-family: var(--brand-font-mono);
+  color: var(--brand-gray);
+  background: var(--brand-white);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
 }
 
 .btn {
@@ -228,67 +237,75 @@ body {
   outline-offset: 2px;
 }
 
-/* Header sits on a blue bar now - a blue focus ring would be invisible
-   against it, so header buttons get a white ring instead. */
-.header .btn:focus-visible {
-  outline-color: var(--brand-white);
-}
-
 .back-btn {
   background-color: transparent;
-  color: var(--brand-white);
+  color: var(--brand-ink-navy);
   padding: 8px;
 }
 
 .toggle-sidebar-btn {
   background-color: transparent;
-  color: var(--brand-white);
+  color: var(--brand-ink-navy);
   padding: 8px;
   margin-right: 10px;
   display: none;
 }
 
-/* Header background is now #022D60 (see .header) - secondary actions are
-   outlined white on the blue bar; the primary CTA (.join-meeting-btn) is
-   the one solid white-filled pill, which is what makes it read as THE
-   action per §12.3's "exactly one primary CTA per view" instead of
-   competing outlined-blue-on-white buttons. */
-.new-note-btn, .sign-in-btn {
-  background-color: transparent;
-  border: 1.5px solid rgba(255, 255, 255, 0.7);
+/* Screen 02 pixel-fidelity pass: header is white now (see .header) - "New
+   capture" is the one solid ink-filled primary CTA, "Record Meeting"/join is
+   a secondary outline shown only while a meeting is actually detected
+   (see showHomeView/onMeetingDetectionStatus in renderer.js) - still "one
+   primary CTA per view" per §12.3, just the opposite fill/outline pairing
+   from the old navy header. */
+.new-note-btn {
+  background-color: var(--brand-ink-navy);
+  border: none;
   color: var(--brand-white);
   margin-right: 10px;
-  -webkit-app-region: no-drag; /* Make button clickable */
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+.new-note-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.new-note-btn:disabled {
+  background-color: var(--brand-gray);
+  cursor: not-allowed;
+  opacity: 1;
 }
 
-.new-note-btn:hover, .sign-in-btn:hover:not(:disabled) {
-  background-color: rgba(255, 255, 255, 0.12);
-  border-color: var(--brand-white);
+.sign-in-btn {
+  background-color: transparent;
+  border: 1.5px solid var(--border-color);
+  color: var(--brand-ink-navy);
+  margin-right: 10px;
+  -webkit-app-region: no-drag;
+}
+.sign-in-btn:hover:not(:disabled) {
+  background-color: #f4f6fb;
+}
+.sign-in-btn:disabled {
+  border-color: var(--border-color);
+  color: var(--brand-gray);
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .join-meeting-btn {
-  background-color: var(--brand-white);
-  border: 1.5px solid var(--brand-white);
-  color: #0277d6;
+  background-color: transparent;
+  border: 1.5px solid var(--brand-blue);
+  color: #0264ac;
   margin-right: 10px;
   -webkit-app-region: no-drag;
 }
 
 .join-meeting-btn:hover:not(:disabled) {
-  background-color: #eaf4ff;
+  background-color: var(--brand-tint-blue);
 }
 
 .join-meeting-btn:disabled {
-  background-color: rgba(255, 255, 255, 0.35);
-  border-color: rgba(255, 255, 255, 0.35);
-  color: rgba(255, 255, 255, 0.75);
-  cursor: not-allowed;
-  opacity: 1;
-}
-
-.sign-in-btn:disabled {
-  border-color: rgba(255, 255, 255, 0.35);
-  color: rgba(255, 255, 255, 0.6);
+  border-color: var(--border-color);
+  color: var(--brand-gray);
   cursor: not-allowed;
   opacity: 1;
 }
@@ -298,8 +315,8 @@ body {
   height: 32px;
   border-radius: 50%;
   overflow: hidden;
-  background-color: var(--brand-white);
-  color: #0277d6;
+  background-color: var(--brand-tint-blue);
+  color: #024a82;
   font-weight: 700;
   font-size: 14px;
   display: flex;
@@ -394,45 +411,468 @@ body {
   width: 100%;
 }
 
+/* Screen 02 pixel-fidelity pass, 2026-07-23: this list is "Recent captures"
+   now (feedback: "notes is recent captures" - one list, not a boxy card grid
+   duplicating the clean dashboard row style) - matches home.jsx's
+   avatar+title+meta+chip row, not the old padded white-card-with-icon-box
+   look. */
 .meeting-card {
   display: flex;
   align-items: center;
-  padding: 15px;
-  background-color: var(--brand-white);
-  border-radius: var(--brand-r-md);
-  box-shadow: var(--brand-shadow);
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border-color);
   cursor: pointer;
-  transition: box-shadow 0.2s ease;
 }
 
 .meeting-card:hover {
-  box-shadow: 0 8px 24px rgba(25, 29, 71, 0.12), 0 2px 6px rgba(25, 29, 71, 0.06);
+  background-color: #f9fafc;
 }
 
-.meeting-icon {
-  margin-right: 15px;
-  width: 40px;
-  height: 40px;
-  border-radius: 4px;
+/* Screen 02/02b - Home/Today dashboard (docs/screen-specs/02-home-today.md).
+   Deliberately separate from .main-content/.content-container above/below -
+   renderMeetings() wipes and rebuilds that container's innerHTML on every
+   data reload, so the dashboard lives as its own sibling block instead of
+   inside it. */
+.home-dashboard {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 0;
+  align-items: start;
+}
+
+.home-main {
+  padding: 20px 24px 4px;
+  min-width: 0;
+}
+
+.home-date {
+  font-size: 12px;
+  color: var(--brand-gray);
+  margin-bottom: 2px;
+}
+
+.home-greeting {
+  font-family: var(--brand-font);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--brand-ink-navy);
+  letter-spacing: -0.01em;
+  margin-bottom: 16px;
+}
+
+.home-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--brand-tint-blue);
+  color: #024a82;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.home-avatar-lg {
+  width: 44px;
+  height: 44px;
+  font-size: 15px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.home-hero {
+  background: var(--brand-grad-indigo);
+  border-radius: var(--brand-r-lg);
+  padding: 18px 20px;
+  color: #fff;
+  margin-bottom: 18px;
+  box-shadow: var(--brand-shadow);
+}
+.home-hero-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.home-hero-kicker {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+.home-hero-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 9px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+.home-hero-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.home-hero-meta {
+  flex: 1;
+  min-width: 0;
+}
+.home-hero-title {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.home-hero-sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 3px;
+}
+.home-hero-cta {
+  padding: 9px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--brand-font);
+  color: var(--brand-ink-navy);
+  background: #fff;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.home-empty-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--brand-r-md);
+  margin-bottom: 18px;
+}
+.home-empty-card-text {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--brand-slate);
+}
+.home-empty-card-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--brand-font);
+  background: var(--brand-ink-navy);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.home-empty-card-btn-ghost {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--brand-font);
+  background: transparent;
+  color: var(--brand-slate);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.home-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 6px;
+}
+.home-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-gray);
+}
+.home-section-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+.home-section-source,
+.home-section-link {
+  font-size: 11px;
+  color: var(--brand-gray);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.home-section-link {
+  color: var(--brand-blue);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.home-schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+.home-schedule-time {
+  font-family: var(--brand-font-mono);
+  font-size: 11.5px;
+  color: var(--brand-gray);
+  width: 58px;
+  flex-shrink: 0;
+}
+.home-schedule-time.is-current {
+  color: var(--brand-blue);
+  font-weight: 600;
+}
+.home-schedule-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--brand-record-red);
+  width: 58px;
+  flex-shrink: 0;
+}
+.home-schedule-meta {
+  flex: 1;
+  min-width: 0;
+}
+.home-schedule-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+}
+.home-schedule-sub {
+  font-size: 11px;
+  color: var(--brand-gray);
+  margin-top: 1px;
+}
+.home-schedule-dur {
+  font-size: 11px;
+  color: var(--brand-gray);
+  flex-shrink: 0;
+}
+.home-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--brand-tint-blue);
+  color: #0264ac;
+}
+
+.home-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+}
+.home-recent-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+}
+.home-recent-sub {
+  font-size: 11px;
+  color: var(--brand-gray);
+  margin-left: 8px;
+}
+
+.home-chip {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.home-chip.tone-green { background: var(--brand-tint-green); color: #068a4f; }
+.home-chip.tone-amber { background: var(--brand-tint-yellow); color: #8a5e00; }
+.home-chip.tone-gray { background: #f4f6fb; color: var(--brand-gray); }
+.home-chip.tone-red { background: #fde7e7; color: var(--brand-record-red); }
+
+.home-rail {
+  border-left: 1px solid var(--border-color);
+  background: #f7f8fb;
+  padding: 20px 18px;
+  min-height: 100%;
+}
+.home-rail-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-gray);
+  margin: 22px 0 10px;
+}
+.home-attention-item {
+  display: flex;
+  gap: 10px;
+  padding: 11px 12px;
+  background: var(--brand-white);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.home-attention-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.home-attention-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+}
+.home-attention-sub {
+  font-size: 11px;
+  color: var(--brand-gray);
+  margin-top: 1px;
+}
+.home-all-clear {
+  display: flex;
+  gap: 10px;
+  padding: 12px 13px;
+  background: var(--brand-tint-green);
+  border-radius: 10px;
+  color: #068a4f;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.home-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.home-stat-card {
+  padding: 12px;
+  background: var(--brand-white);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+.home-stat-num {
   font-size: 20px;
+  font-weight: 700;
+  color: var(--brand-ink-navy);
+}
+.home-stat-label {
+  font-size: 10.5px;
+  color: var(--brand-gray);
+  margin-top: 2px;
+}
+
+.home-connection-card {
+  display: flex;
+  gap: 10px;
+  padding: 12px 13px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  background: var(--brand-tint-green);
+  color: #068a4f;
+}
+.home-connection-card.is-degraded {
+  background: #fde7e7;
+  color: var(--brand-record-red);
+}
+
+/* 02b - live-recording strip, pinned under the app header */
+.home-live-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 24px;
+  background: #fde7e7;
+  border-bottom: 1px solid var(--border-color);
+}
+.home-live-timer {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-record-red);
+}
+.home-live-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+}
+.home-live-sub {
+  font-size: 11.5px;
+  color: var(--brand-gray);
+}
+.home-live-wave {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+.home-live-spacer {
+  flex: 1;
+}
+.home-live-btn-open,
+.home-live-btn-stop {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--brand-font);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.home-live-btn-open {
+  color: #fff;
+  background: var(--brand-ink-navy);
+  border: none;
+}
+.home-live-btn-stop {
+  color: var(--brand-record-red);
+  background: transparent;
+  border: 1px solid var(--brand-record-red);
 }
 
 .meeting-content {
-  flex-grow: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .meeting-title {
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--brand-ink-navy);
-  margin-bottom: 4px;
 }
 
 .meeting-time {
-  font-size: 13px;
-  color: var(--brand-slate);
+  font-size: 11px;
+  color: var(--brand-gray);
 }
 
 .meeting-demo-link {
@@ -490,26 +930,6 @@ body {
   }
 }
 
-.meeting-icon.calendar {
-  background-color: var(--light-purple);
-}
-
-.meeting-icon.document {
-  background-color: var(--light-green);
-}
-
-.profile-pic {
-  width: 40px;
-  height: 40px;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.profile-pic img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
 
 /* Note Editor Styles */
 .note-container {

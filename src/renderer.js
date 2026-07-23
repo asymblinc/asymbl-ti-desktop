@@ -122,6 +122,10 @@ async function refreshAuthUi() {
   }
   const { signedIn, email, photoDataUri } = await window.electronAPI.getAuthStatus();
   window.isSignedIn = signedIn;
+  window.currentUserEmail = email || null;
+  if (typeof renderHomeConnection === 'function') {
+    renderHomeConnection();
+  }
 
   // Screen 00: full-bleed gate replaces the whole app while signed out -
   // except mid-recording, where auth dropping must never yank away the
@@ -436,47 +440,42 @@ function debounce(func, wait) {
 
 
 // Function to create meeting card elements
+// Screen 02 (Home/Today §2.5) "Recent captures" meta line - "58m · Today
+// 11:00 AM" for today/yesterday (matches design), "45m · Fri, Apr 25"
+// further back. Real duration_s (persisted on finalize), not fabricated.
+function homeRecentMeta(meeting) {
+  const durText = typeof meeting.duration_s === 'number' ? `${Math.round(meeting.duration_s / 60)}m · ` : '';
+  const dateLabel = formatDateHeader(meeting.date);
+  const timeText = dateLabel === 'Today' || dateLabel === 'Yesterday'
+    ? ` ${new Date(meeting.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`
+    : '';
+  return `${durText}${dateLabel}${timeText}`;
+}
+
 function createMeetingCard(meeting) {
   const card = document.createElement('div');
   card.className = 'meeting-card';
   card.dataset.id = meeting.id;
 
-  let iconHtml = '';
+  const titleHtml = meeting.hasDemo
+    ? `<a class="meeting-demo-link">${meeting.title}</a>`
+    : meeting.title;
 
-  if (meeting.type === 'profile') {
-    iconHtml = `
-      <div class="profile-pic">
-        <img src="https://via.placeholder.com/40" alt="Profile">
-      </div>
-    `;
-  } else if (meeting.type === 'calendar') {
-    iconHtml = `
-      <div class="meeting-icon calendar">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M19 4H18V2H16V4H8V2H6V4H5C3.89 4 3.01 4.9 3.01 6L3 20C3 21.1 3.89 22 5 22H19C20.1 22 21 21.1 21 20V6C21 4.9 20.1 4 19 4ZM19 20H5V10H19V20ZM19 8H5V6H19V8ZM9 14H7V12H9V14ZM13 14H11V12H13V14ZM17 14H15V12H17V14ZM9 18H7V16H9V18ZM13 18H11V16H13V18ZM17 18H15V16H17V18Z" fill="#6947BD"/>
-        </svg>
-      </div>
-    `;
-  } else if (meeting.type === 'document') {
-    iconHtml = `
-      <div class="meeting-icon document">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M14 2H6C4.9 2 4.01 2.9 4.01 4L4 20C4 21.1 4.89 22 5.99 22H18C19.1 22 20 21.1 20 20V8L14 2ZM16 18H8V16H16V18ZM16 14H8V12H16V14ZM13 9V3.5L18.5 9H13Z" fill="#4CAF50"/>
-        </svg>
-      </div>
-    `;
-  }
-
-  let subtitleHtml = meeting.hasDemo
-    ? `<div class="meeting-time"><a class="meeting-demo-link">${meeting.subtitle}</a></div>`
-    : `<div class="meeting-time">${meeting.subtitle}</div>`;
+  // Screen 02 (Home/Today §2.5) sync-state chip - real duration_s (persisted
+  // on finalize) and real pending-sync state (notes-sync.js), same source
+  // this card already renders from, not a second data path.
+  const isPending = homePendingSyncIds.includes(meeting.id);
+  const syncChipHtml = isPending
+    ? '<span class="home-chip tone-amber">Local</span>'
+    : '<span class="home-chip tone-green">Synced</span>';
 
   card.innerHTML = `
-    ${iconHtml}
+    <div class="home-avatar">${homeInitials(meeting.title)}</div>
     <div class="meeting-content">
-      <div class="meeting-title">${meeting.title}</div>
-      ${subtitleHtml}
+      <span class="meeting-title">${titleHtml}</span>
+      <span class="meeting-time">${homeRecentMeta(meeting)}</span>
     </div>
+    ${syncChipHtml}
     <div class="meeting-actions">
       <button class="delete-meeting-btn" data-id="${meeting.id}" title="Delete note">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -496,12 +495,17 @@ function showHomeView() {
   document.getElementById('backButton').style.display = 'none';
   document.getElementById('newNoteBtn').style.display = 'block';
   document.getElementById('toggleSidebar').style.display = 'none';
+  if (typeof refreshHomeDashboard === 'function') {
+    refreshHomeDashboard();
+  }
 
-  // Show Record Meeting button and set its state based on meeting detection
+  // Show Record Meeting button and set its state based on meeting detection.
+  // Screen 02 pixel-fidelity pass: design's header shows exactly one CTA
+  // ("New capture") when idle - "Record Meeting" only appears once a
+  // meeting is actually detected, rather than always showing (disabled).
   const joinMeetingBtn = document.getElementById('joinMeetingBtn');
   if (joinMeetingBtn) {
-    // Always show the button
-    joinMeetingBtn.style.display = 'block';
+    joinMeetingBtn.style.display = window.meetingDetected ? 'block' : 'none';
     joinMeetingBtn.innerHTML = `Record ${window.meetingPlatform || "Meeting"}`;
 
     // Enable/disable based on meeting detection AND sign-in state - matches
@@ -853,11 +857,19 @@ function renderMeetings() {
   const mainContent = document.querySelector('.main-content .content-container');
   mainContent.innerHTML = '';
 
-  // Create all notes section (replaces both upcoming and date-grouped sections)
+  // Create all notes section (replaces both upcoming and date-grouped sections).
+  // Heading + "Library →" link: the Library screen (#27) doesn't exist yet,
+  // so this list IS the history surface (screen 02 spec §2.5) - no separate
+  // "Recent captures" preview duplicating the same data (feedback 2026-07-23:
+  // "notes is recent captures").
   const notesSection = document.createElement('section');
   notesSection.className = 'meetings-section';
   notesSection.innerHTML = `
-    <h2 class="section-title">Notes</h2>
+    <div class="home-section-header" style="margin-top: 0;">
+      <h2 class="section-title" style="margin-bottom: 0;">Recent captures</h2>
+      <div class="home-section-rule"></div>
+      <span class="home-section-link" id="homeLibraryLink">Library →</span>
+    </div>
     <div class="meetings-list" id="notes-list"></div>
   `;
   mainContent.appendChild(notesSection);
@@ -866,6 +878,16 @@ function renderMeetings() {
   const notesContainer = notesSection.querySelector('#notes-list');
 
   renderNotesInto(notesContainer, '');
+
+  // homeLibraryLink is rebuilt by this function on every reload - wire it
+  // here rather than once in DOMContentLoaded, since the element itself is
+  // recreated each time.
+  const libraryLink = notesSection.querySelector('#homeLibraryLink');
+  if (libraryLink) {
+    libraryLink.addEventListener('click', () => {
+      notesSection.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
 }
 
 // Load meetings data from file
@@ -925,14 +947,291 @@ async function loadMeetingsDataFromFile() {
 
       console.log('Meetings data loaded from file');
 
-      // Re-render the meetings
-      renderMeetings();
+      // Re-render the meetings (refreshHomeDashboard also calls
+      // renderMeetings(), so its sync-state chips use fresh pending-sync data)
+      refreshHomeDashboard();
     } else {
       console.error('Failed to load meetings data from file:', result.error);
     }
   } catch (error) {
     console.error('Error loading meetings data from file:', error);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Screen 02/02b - Home/Today dashboard (docs/screen-specs/02-home-today.md).
+// State + render functions. Data sources, per §12 of the spec: today's
+// schedule is real (SF Event via today-schedule-updated IPC), recent
+// captures/stats are real (local meetingsData), needs-attention is real for
+// only 2 of 5 queue types (waiting-to-sync, speaker-labels - the other 3 have
+// no backing data source anywhere in this app yet), connection status is
+// real (auth + mic permission; calendar is honestly never "connected").
+// ---------------------------------------------------------------------------
+let homeTodaySchedule = [];
+let homeLiveRecording = null; // { noteId, recordingId, startedAt, title } | null
+let homePendingSyncIds = [];
+let homeTickInterval = null;
+
+function homeInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
+}
+
+function homeFormatTime(iso) {
+  // Explicit hour12 - this app launches with --lang=en-GB, whose default
+  // toLocaleTimeString format is 24-hour ("14:30"), not the design's 12-hour
+  // "2:30 PM".
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function homeMinutesUntil(iso) {
+  return Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+}
+
+function renderHomeGreeting() {
+  const dateEl = document.getElementById('homeDate');
+  const greetEl = document.getElementById('homeGreeting');
+  if (!dateEl || !greetEl) return;
+
+  const now = new Date();
+  // Explicit "Weekday, Month Day" (design: "Tuesday, July 22") rather than
+  // toLocaleDateString's locale-dependent field order (en-GB, this app's
+  // launch locale, renders "Thursday, 23 July" instead).
+  const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  dateEl.textContent = `${WEEKDAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()}`;
+
+  const hour = now.getHours();
+  const timeGreeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const name = window.currentUserEmail ? window.currentUserEmail.split('@')[0] : 'there';
+  const count = homeTodaySchedule.length;
+  greetEl.textContent = count === 0
+    ? `${timeGreeting}, ${name}. Nothing scheduled — capture an unscheduled call anytime.`
+    : `${timeGreeting}, ${name}. ${count} conversation${count === 1 ? '' : 's'} today.`;
+}
+
+// Up-next hero (spec §2.3) + Today's schedule list (spec §2.4). Capture-mode
+// pill always reads "You capture" - the capture-policy pre-check service
+// that would distinguish "Bot joins"/"Both" doesn't exist in this build.
+function renderHomeSchedule() {
+  const heroEl = document.getElementById('homeHero');
+  const emptyEl = document.getElementById('homeEmptySchedule');
+  const listEl = document.getElementById('homeScheduleList');
+  if (!heroEl || !emptyEl || !listEl) return;
+
+  renderHomeGreeting();
+
+  emptyEl.style.display = homeTodaySchedule.length === 0 ? 'flex' : 'none';
+
+  const next = homeTodaySchedule[0];
+  const nextMins = next ? homeMinutesUntil(next.startTime) : null;
+  // Hero collapses while a recording is live (spec §3 - "you're in the
+  // meeting"), and only shows for a next meeting under 2h away.
+  if (!homeLiveRecording && next && nextMins >= 0 && nextMins < 120) {
+    heroEl.style.display = 'block';
+    document.getElementById('homeHeroKicker').textContent = `Up next · in ${nextMins} min`;
+    document.getElementById('homeHeroAvatar').textContent = homeInitials(next.whoName || next.subject);
+    document.getElementById('homeHeroTitle').textContent = next.subject;
+    document.getElementById('homeHeroSub').textContent =
+      [next.whoName, homeFormatTime(next.startTime), next.location].filter(Boolean).join(' · ');
+  } else {
+    heroEl.style.display = 'none';
+  }
+
+  listEl.innerHTML = DOMPurify.sanitize(homeTodaySchedule.map((evt) => {
+    const mins = homeMinutesUntil(evt.startTime);
+    const isLiveRow = homeLiveRecording && mins <= 0 && mins > -180;
+    const isCurrent = !homeLiveRecording && mins <= 0 && mins > -60;
+    const timeCell = isLiveRow
+      ? `<span class="home-schedule-live"><span class="recall-pulse"></span>LIVE</span>`
+      : `<span class="home-schedule-time${isCurrent ? ' is-current' : ''}">${homeFormatTime(evt.startTime)}</span>`;
+    return `
+      <div class="home-schedule-row">
+        ${timeCell}
+        <div class="home-avatar">${homeInitials(evt.whoName || evt.subject)}</div>
+        <div class="home-schedule-meta">
+          <div class="home-schedule-title">${evt.subject || 'Untitled event'}</div>
+          <div class="home-schedule-sub">${evt.whoName || 'No linked record'}</div>
+        </div>
+        <span class="home-schedule-dur">${evt.location || ''}</span>
+        <span class="home-mode-pill">You capture</span>
+      </div>
+    `;
+  }).join(''));
+}
+
+// Needs attention (spec §2.6) - only 2 of 5 queue types have a real data
+// source in this build (see file header comment + TODOS.md #11).
+const HOME_ATTENTION_ICONS = {
+  // upload (waiting to sync)
+  amber: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 11V3M8 3L4.5 6.5M8 3l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 11v1.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  // users (speakers need labels)
+  blue: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="5.5" cy="5" r="2" stroke="currentColor" stroke-width="1.4"/><circle cx="11" cy="5.5" r="1.6" stroke="currentColor" stroke-width="1.3"/><path d="M1.8 13c0-2.2 1.7-3.8 3.7-3.8s3.7 1.6 3.7 3.8M9.6 9.8c1.7.2 2.9 1.6 2.9 3.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+};
+
+// Needs attention (spec §2.6) - only 2 of 5 queue types have a real data
+// source in this build (see file header comment + TODOS.md #11). Each item
+// has a real click action, not a static row: retry sync now, or open the
+// note to review/relabel speakers.
+function renderHomeAttention() {
+  const listEl = document.getElementById('homeAttentionList');
+  if (!listEl) return;
+
+  const items = [];
+  if (homePendingSyncIds.length > 0) {
+    const first = pastMeetings.find((m) => m.id === homePendingSyncIds[0]);
+    items.push({
+      tone: 'amber',
+      title: homePendingSyncIds.length === 1 ? '1 capture waiting to sync' : `${homePendingSyncIds.length} captures waiting to sync`,
+      sub: first ? `${first.title} · stored locally · click to retry` : 'Stored locally · click to retry',
+      action: 'retry-sync',
+      meetingId: homePendingSyncIds[0],
+    });
+  }
+  const needsLabels = pastMeetings.filter((m) =>
+    (m.transcript || []).some((t) => t.speaker === 'Unknown Speaker' || /^Speaker \d+$/.test(t.speaker || ''))
+  );
+  if (needsLabels.length > 0) {
+    items.push({
+      tone: 'blue',
+      title: needsLabels.length === 1 ? 'Speakers need labels' : `${needsLabels.length} calls need speaker labels`,
+      sub: `${needsLabels[0].title} · click to review`,
+      action: 'open-note',
+      meetingId: needsLabels[0].id,
+    });
+  }
+
+  if (items.length === 0) {
+    listEl.innerHTML = `
+      <div class="home-all-clear">
+        <strong>All clear.</strong>&nbsp;Nothing needs your attention right now.
+      </div>
+    `;
+    return;
+  }
+
+  const toneBg = { amber: 'var(--brand-tint-yellow)', blue: 'var(--brand-tint-blue)' };
+  const toneFg = { amber: '#8a5e00', blue: '#0264ac' };
+  listEl.innerHTML = DOMPurify.sanitize(items.map((item) => `
+    <div class="home-attention-item" data-action="${item.action}" data-meeting-id="${item.meetingId}">
+      <div class="home-attention-icon" style="background:${toneBg[item.tone]};color:${toneFg[item.tone]}">${HOME_ATTENTION_ICONS[item.tone]}</div>
+      <div style="flex: 1; min-width: 0;">
+        <div class="home-attention-title">${item.title}</div>
+        <div class="home-attention-sub">${item.sub}</div>
+      </div>
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="flex-shrink: 0;"><path d="M6 3l5 5-5 5" stroke="var(--brand-gray)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+  `).join(''));
+
+  listEl.querySelectorAll('.home-attention-item').forEach((row) => {
+    row.addEventListener('click', async () => {
+      const { action, meetingId } = row.dataset;
+      if (action === 'open-note') {
+        showEditorView(meetingId);
+      } else if (action === 'retry-sync') {
+        row.style.opacity = '0.6';
+        await window.electronAPI.retryNoteSync(meetingId);
+        refreshHomeDashboard();
+      }
+    });
+  });
+}
+
+// This week (spec §2.7) - captures + hours are real (local data); synced-to-SF
+// and signals-extracted are honestly unavailable (no tracking exists yet),
+// not fabricated numbers.
+function renderHomeStats() {
+  const gridEl = document.getElementById('homeStatsGrid');
+  if (!gridEl) return;
+
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const thisWeek = pastMeetings.filter((m) => new Date(m.date).getTime() >= weekAgo);
+  const totalSeconds = thisWeek.reduce((sum, m) => sum + (typeof m.duration_s === 'number' ? m.duration_s : 0), 0);
+
+  const stats = [
+    { n: String(thisWeek.length), l: 'captures' },
+    { n: `${(totalSeconds / 3600).toFixed(1)}h`, l: 'recorded' },
+    { n: '—', l: 'synced to SF' },
+    { n: '—', l: 'signals extracted' },
+  ];
+
+  gridEl.innerHTML = stats.map((s) => `
+    <div class="home-stat-card">
+      <div class="home-stat-num">${s.n}</div>
+      <div class="home-stat-label">${s.l}</div>
+    </div>
+  `).join('');
+}
+
+// Connection status (spec §2.8) - real SF-token + mic-permission checks.
+// Calendar is never "connected" (no Google/Outlook integration exists -
+// TODOS.md #13) - this correctly shows the degraded state per spec §4.2,
+// not a bug.
+async function renderHomeConnection() {
+  const cardEl = document.getElementById('homeConnectionCard');
+  if (!cardEl) return;
+
+  const micStatus = await window.electronAPI.getMicPermissionStatus();
+  const micOk = micStatus === 'granted';
+
+  if (!window.isSignedIn) {
+    cardEl.className = 'home-connection-card is-degraded';
+    cardEl.innerHTML = '<strong>Reconnect Salesforce.</strong>&nbsp;Captures keep working and will sync when you\'re back.';
+  } else if (!micOk) {
+    cardEl.className = 'home-connection-card is-degraded';
+    cardEl.innerHTML = '<strong>Microphone access needed.</strong>&nbsp;Grant mic permission in System Settings to capture audio.';
+  } else {
+    cardEl.className = 'home-connection-card';
+    cardEl.innerHTML = '<strong>Salesforce and mic connected.</strong>&nbsp;Calendar isn\'t connected yet - only Salesforce interviews show on Home.';
+  }
+}
+
+// 02b live-recording strip (spec §3).
+function renderHomeLiveStrip() {
+  const stripEl = document.getElementById('homeLiveStrip');
+  if (!stripEl) return;
+
+  stripEl.style.display = homeLiveRecording ? 'flex' : 'none';
+  if (homeLiveRecording) {
+    document.getElementById('homeLiveTitle').textContent = homeLiveRecording.title;
+    const meeting = pastMeetings.find((m) => m.id === homeLiveRecording.noteId);
+    document.getElementById('homeLiveSub').textContent = meeting?.participants?.length
+      ? `${meeting.participants.length} participants · capturing`
+      : 'capturing';
+  }
+}
+
+function homeTickLiveTimer() {
+  if (!homeLiveRecording) return;
+  const elapsed = Math.max(0, Math.round((Date.now() - homeLiveRecording.startedAt) / 1000));
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  const timerEl = document.getElementById('homeLiveTimer');
+  if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+}
+
+function renderHomeDashboard() {
+  renderHomeSchedule();
+  renderHomeAttention();
+  renderHomeStats();
+  renderHomeConnection();
+  renderHomeLiveStrip();
+}
+
+// Refreshes homePendingSyncIds (the one piece of Home's state not already
+// pushed via IPC or loaded with meetingsData) before rendering. Also
+// re-renders the notes list so its sync-state chips (createMeetingCard)
+// reflect the freshly-fetched pending state, not whatever was cached when
+// the list last rendered.
+async function refreshHomeDashboard() {
+  try {
+    homePendingSyncIds = await window.electronAPI.getPendingSyncMeetingIds();
+  } catch (error) {
+    homePendingSyncIds = [];
+  }
+  renderMeetings();
+  renderHomeDashboard();
 }
 
 // Real user-facing live transcript panel (task: give the transcript a
@@ -1573,15 +1872,56 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize the debug panel
   initDebugPanel();
 
-  // Try to load the latest data from file - this is the only data source
+  // Try to load the latest data from file - this is the only data source.
+  // loadMeetingsDataFromFile() and showHomeView() below each already call
+  // refreshHomeDashboard() (which also re-renders the notes list), so no
+  // separate renderMeetings()/refreshHomeDashboard() call is needed here.
   await loadMeetingsDataFromFile();
-
-  // Render meetings only after loading from file
   console.log('Data loaded, rendering meetings...');
-  renderMeetings();
 
   // Initially show home view
   showHomeView();
+
+  // Screen 02 (Home/Today) real SF Event schedule feed, pushed from main.js.
+  window.electronAPI.onTodayScheduleUpdated((schedule) => {
+    homeTodaySchedule = schedule || [];
+    renderHomeDashboard();
+  });
+
+  // Hero's Pre-Brief CTA: honestly-documented no-op, same pattern as the
+  // tray popover's openPreBrief (#22/#23 not built - no Pre-Brief window
+  // exists yet to route to).
+  const homeHeroCta = document.getElementById('homeHeroCta');
+  if (homeHeroCta) {
+    homeHeroCta.addEventListener('click', () => console.log('Pre-Brief not yet built (#22/#23)'));
+  }
+  const homeEmptyNewCaptureBtn = document.getElementById('homeEmptyNewCaptureBtn');
+  if (homeEmptyNewCaptureBtn) {
+    homeEmptyNewCaptureBtn.addEventListener('click', () => createNewMeeting());
+  }
+  // Honest no-op, same pattern as the hero's Pre-Brief CTA - no Google/Outlook
+  // Calendar OAuth integration exists yet (TODOS.md #13).
+  const homeEmptyConnectCalendarBtn = document.getElementById('homeEmptyConnectCalendarBtn');
+  if (homeEmptyConnectCalendarBtn) {
+    homeEmptyConnectCalendarBtn.addEventListener('click', () => console.log('Calendar connect not yet built (TODOS.md #13)'));
+  }
+  // homeLibraryLink is wired inside renderMeetings() instead - that section
+  // (and the link) is rebuilt on every data reload, so a one-time listener
+  // here would go stale the first time the notes list re-renders.
+  const homeLiveOpenBtn = document.getElementById('homeLiveOpenBtn');
+  if (homeLiveOpenBtn) {
+    homeLiveOpenBtn.addEventListener('click', () => {
+      if (homeLiveRecording?.noteId) showEditorView(homeLiveRecording.noteId);
+    });
+  }
+  const homeLiveStopBtn = document.getElementById('homeLiveStopBtn');
+  if (homeLiveStopBtn) {
+    homeLiveStopBtn.addEventListener('click', async () => {
+      if (homeLiveRecording?.recordingId) {
+        await window.electronAPI.stopManualRecording(homeLiveRecording.recordingId);
+      }
+    });
+  }
 
   // Spec B F2: SF SSO login state
   await refreshAuthUi();
@@ -1608,11 +1948,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       const inHomeView = document.getElementById('homeView').style.display !== 'none';
 
       if (inHomeView) {
-        // Always show the button, but enable/disable based on meeting
-        // detection AND sign-in state - recording while signed out was a
-        // real gap (worked regardless of auth, found during end-to-end
-        // testing 2026-07-22).
-        joinMeetingBtn.style.display = 'block';
+        // Only shown once a meeting is actually detected (screen 02
+        // pixel-fidelity pass - design's header has exactly one CTA when
+        // idle); enable/disable still also depends on sign-in state -
+        // recording while signed out was a real gap (worked regardless of
+        // auth, found during end-to-end testing 2026-07-22).
+        joinMeetingBtn.style.display = data.detected ? 'block' : 'none';
         joinMeetingBtn.disabled = !data.detected || !window.isSignedIn;
         joinMeetingBtn.title = window.isSignedIn ? '' : 'Sign in with Asymbl to record a meeting';
         joinMeetingBtn.textContent = data.detected ? `Record ${data.platformName}` : 'Record meeting';
@@ -2202,6 +2543,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       const isActive = data.state === 'recording' || data.state === 'paused';
       updateRecordingButtonUI(isActive, isActive ? data.recordingId : null);
     }
+
+    // Screen 02b (Home while recording) - drives the live strip regardless
+    // of which note is currently open in the editor, since Home is browsable
+    // during an active capture (spec §3).
+    if (data.state === 'recording') {
+      homeLiveRecording = { noteId: data.noteId, recordingId: data.recordingId, startedAt: data.startedAt, title: data.title };
+      if (homeTickInterval) clearInterval(homeTickInterval);
+      homeTickInterval = setInterval(homeTickLiveTimer, 1000);
+      homeTickLiveTimer();
+    } else if (data.state === 'ended') {
+      homeLiveRecording = null;
+      if (homeTickInterval) {
+        clearInterval(homeTickInterval);
+        homeTickInterval = null;
+      }
+    }
+    renderHomeDashboard();
   });
 
   // Setup record/stop button toggle

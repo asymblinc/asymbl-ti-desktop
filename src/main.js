@@ -2,7 +2,7 @@ require('dotenv').config();
 // F10-R10: must run before other requires so startup crashes are captured too.
 require('./crash-reporter').initCrashReporter();
 
-const { app, BrowserWindow, ipcMain, protocol, Notification, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, Notification, globalShortcut, systemPreferences } = require('electron');
 // electron-forge start (dev mode) runs the actual node_modules/electron
 // binary, whose bundle identity is baked in as "Electron" before any of our
 // code runs - the Dock hover-tooltip name comes from that, not from the
@@ -135,7 +135,14 @@ app.whenReady().then(() => {
   // (the project root in dev mode) is needed to find the real source file.
   if (process.platform === 'darwin' && app.dock) {
     try {
-      app.dock.setIcon(path.join(app.getAppPath(), 'src', 'assets', 'asymbl-icon.png'));
+      // asymbl-icon.png is a flat square (used as-is for the in-app header
+      // logo, where that's correct) - the Dock needs the macOS Big Sur+
+      // squircle treatment (rounded shape + padding) or it renders as a hard
+      // square next to every other app's rounded icon (real bug found via a
+      // live screenshot, 2026-07-23). asymbl-icon-macos.png is that same
+      // mark pre-shaped into the squircle, generated once via
+      // scripts/gen-macos-icon.py - same asset asymbl.icns is built from.
+      app.dock.setIcon(path.join(app.getAppPath(), 'src', 'assets', 'asymbl-icon-macos.png'));
     } catch (error) {
       console.error('Failed to set dock icon:', error.message);
     }
@@ -250,6 +257,24 @@ app.whenReady().then(() => {
   refreshNextEvent();
   setInterval(refreshNextEvent, 5 * 60 * 1000);
 
+  // Screen 02 (Home/Today, docs/screen-specs/02-home-today.md §2.4) -
+  // "Today's schedule" list, same real SF Event source and 5-min cadence as
+  // the tray's next-event poll above, just bounded to the rest of today
+  // instead of a single row. Pushed to the renderer (not polled from there)
+  // since main already holds the access token and the polling interval.
+  function refreshTodaySchedule() {
+    if (!authStore.getAccessToken()) {
+      return;
+    }
+    controlPlaneClient.fetchTodaySchedule().then((result) => {
+      if (result.status === 'success' && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('today-schedule-updated', result.schedule);
+      }
+    });
+  }
+  refreshTodaySchedule();
+  setInterval(refreshTodaySchedule, 5 * 60 * 1000);
+
   // Set up SDK logger IPC handlers
   ipcMain.on('sdk-log', (event, logEntry) => {
     // Forward logs from renderer to any open windows
@@ -309,6 +334,7 @@ app.whenReady().then(() => {
       }
       refreshTrayAuthState();
       refreshNextEvent();
+      refreshTodaySchedule();
     },
     stopRecording: async () => {
       if (!currentRecordingWindowId) return;
@@ -649,6 +675,20 @@ async function finalizeDesktopRecordingSession(windowId) {
   }
 
   const durationS = tracked.recordingStartedAt ? Math.round((Date.now() - tracked.recordingStartedAt) / 1000) : 0;
+
+  // Screen 02 (Home/Today §2.5/§2.7) needs a real per-meeting duration for
+  // "Recent captures" and the "hours recorded" stat - durationS above was
+  // previously only sent to telemetry, never persisted onto the meeting
+  // record itself. Uses the same scheduleOperation queue as every other
+  // meetings.json write (T14's race fix), not a direct fs write.
+  fileOperationManager.scheduleOperation((data) => {
+    const meeting = data.pastMeetings.find((m) => m.id === tracked.noteId);
+    if (meeting) {
+      meeting.duration_s = durationS;
+    }
+    return data;
+  }).catch((error) => console.error('Error persisting duration_s onto meeting record:', error.message));
+
   const result = await controlPlaneClient.finalizeDesktopSession(tracked.sessionId, {
     endedAt: new Date().toISOString(),
     finalSeconds: durationS,
@@ -943,6 +983,24 @@ function initSDK() {
     updater.setRecordingActive(true); // F10-R4: never force-restart mid-recording
     currentRecordingWindowId = window.id;
     tray.setRecordingActive(true, { platform: window.platform || 'unknown', startedAt: startedAtMs });
+
+    // Screen 02b (Home while recording, docs/screen-specs/02-home-today.md
+    // §3) - 'recording-state-change' was already declared in preload.js and
+    // listened for in renderer.js, but main.js never actually sent it (dead
+    // channel). Home's live strip needs the meeting title too, not just
+    // noteId/state, so this is a real payload rather than reusing the
+    // existing note-editor-only shape as-is.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const data = await fileOperationManager.readMeetingsData();
+      const meeting = noteId ? data.pastMeetings.find((m) => m.id === noteId) : null;
+      mainWindow.webContents.send('recording-state-change', {
+        noteId,
+        state: 'recording',
+        recordingId: window.id,
+        startedAt: startedAtMs,
+        title: meeting?.title || 'Recording',
+      });
+    }
   });
 
   RecallAiSdk.addEventListener('recording-ended', async evt => {
@@ -952,10 +1010,15 @@ function initSDK() {
     }
 
     console.log("Recording stopped for window:", window.id);
+    const noteId = global.activeMeetingIds?.[window.id]?.noteId || null;
     activeRecordings.removeRecording(window.id);
     updater.setRecordingActive(false);
     currentRecordingWindowId = null;
     tray.setRecordingActive(false);
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('recording-state-change', { noteId, state: 'ended', recordingId: window.id });
+    }
   });
 
   // Listen for real-time transcript events
@@ -1417,6 +1480,34 @@ ipcMain.handle('loadMeetingsData', async () => {
     console.error('Failed to load meetings data:', error);
     return { success: false, error: error.message };
   }
+});
+
+// Screen 02 (Home/Today §2.6) "Waiting to sync" queue - real pending-retry
+// state from notes-sync.js, not fabricated.
+ipcMain.handle('getPendingSyncMeetingIds', () => notesSync.getPendingSyncMeetingIds());
+
+// "Waiting to sync" attention item's real click action - retry now, instead
+// of only ever retrying opportunistically on the next unrelated successful
+// sync (notes-sync.js's existing behavior).
+ipcMain.handle('retryNoteSync', async (event, meetingId) => {
+  const data = await fileOperationManager.readMeetingsData();
+  const meeting = data.pastMeetings.find((m) => m.id === meetingId);
+  if (!meeting || !meeting.notesSessionId) {
+    return { success: false, error: 'No notes session for this meeting' };
+  }
+  const result = await notesSync.syncNote(meetingId, meeting.notesSessionId, meeting.content);
+  return { success: result.status === 'success', error: result.message };
+});
+
+// Screen 02 (Home/Today §2.8) connection status card's real mic-permission
+// check. getMediaAccessStatus is macOS/Windows only (Electron docs) - other
+// platforms have no concept of a pre-flight permission prompt, so 'granted'
+// there is the honest default rather than a fabricated check.
+ipcMain.handle('getMicPermissionStatus', () => {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    return systemPreferences.getMediaAccessStatus('microphone');
+  }
+  return 'granted';
 });
 
 // Function to create a new meeting note and start recording
