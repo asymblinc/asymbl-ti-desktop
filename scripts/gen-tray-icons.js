@@ -97,6 +97,46 @@ function drawBracket(size, black) {
   return buf;
 }
 
+// Windows tray icons are NOT auto-tinted (no template-image concept), so a
+// pure-black glyph is invisible on a dark taskbar - confirmed via grok
+// review + OpenWhispr's real Windows icon (separate colored .ico, never
+// reusing the macOS template asset). Colored fill + a white halo (drawn
+// first, slightly dilated) keeps it visible on both light and dark
+// taskbars without needing per-theme detection.
+function drawBracketColored(size, hexColor) {
+  const r = parseInt(hexColor.slice(1, 3), 16);
+  const g = parseInt(hexColor.slice(3, 5), 16);
+  const b = parseInt(hexColor.slice(5, 7), 16);
+  const buf = Buffer.alloc(size * size * 4);
+  const strokeW = Math.max(1, Math.round(size * 0.145));
+  const inset = Math.round(size * 0.2);
+  const bottomArmLen = Math.round(size * 0.42);
+  const halo = Math.max(1, Math.round(size * 0.09));
+
+  function fillRect(x0, y0, x1, y1, rr, gg, bb) {
+    for (let y = Math.max(0, y0); y < Math.min(size, y1); y++) {
+      for (let x = Math.max(0, x0); x < Math.min(size, x1); x++) {
+        const i = (y * size + x) * 4;
+        buf[i] = rr;
+        buf[i + 1] = gg;
+        buf[i + 2] = bb;
+        buf[i + 3] = 255;
+      }
+    }
+  }
+  function bracket(inset_, strokeW_, bottomArmLen_, rr, gg, bb) {
+    fillRect(inset_, inset_, size - inset_, inset_ + strokeW_, rr, gg, bb);
+    fillRect(inset_, inset_, inset_ + strokeW_, size - inset_, rr, gg, bb);
+    fillRect(inset_, size - inset_ - strokeW_, inset_ + bottomArmLen_, size - inset_, rr, gg, bb);
+  }
+  // White halo first (dilated), then the real color on top - simple fixed
+  // 2-layer contrast outline, not true edge-detection dilation, but enough
+  // at 16-32px tray sizes.
+  bracket(inset - halo, strokeW + halo * 2, bottomArmLen + halo, 255, 255, 255);
+  bracket(inset, strokeW, bottomArmLen, r, g, b);
+  return buf;
+}
+
 function drawRedDot(size) {
   const buf = Buffer.alloc(size * size * 4);
   const cx = size / 2;
@@ -133,4 +173,11 @@ for (const [suffix, size] of [['', 22], ['@2x', 44], ['@3x', 66]]) {
   fs.writeFileSync(path.join(outDir, `tray-icon-recording${suffix}.png`), encodePng(size, size, buf));
 }
 
-console.log('Wrote tray-icon-template.png (+@2x/@3x) and tray-icon-recording.png (+@2x/@3x) to', outDir);
+// Windows/Linux tray icon: standard system-tray sizes (16/32px), colored +
+// haloed (see drawBracketColored) since there's no OS auto-tint there.
+for (const [suffix, size] of [['', 16], ['@2x', 32]]) {
+  const buf = drawBracketColored(size, '#038FF8');
+  fs.writeFileSync(path.join(outDir, `tray-icon-win${suffix}.png`), encodePng(size, size, buf));
+}
+
+console.log('Wrote tray-icon-template.png (+@2x/@3x), tray-icon-recording.png (+@2x/@3x), and tray-icon-win.png (+@2x) to', outDir);

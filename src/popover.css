@@ -11,8 +11,17 @@ html, body {
 
 .popover {
   width: 320px;
-  padding-top: 8px; /* room for the arrow */
+  padding-top: 8px; /* room for the arrow - default: popover below the icon (macOS menu bar) */
   position: relative;
+}
+
+/* Windows (commonly bottom taskbar): popover sits ABOVE the tray icon, so
+   the arrow moves to the bottom edge and points down instead of up - class
+   toggled by popover-renderer.js from the main process's actual placement
+   decision (positionPopover(), tray.js), not assumed from platform alone. */
+.popover.anchor-above {
+  padding-top: 0;
+  padding-bottom: 8px;
 }
 
 .popover-arrow {
@@ -25,6 +34,14 @@ html, body {
   top: 1px;
   right: 24px;
   filter: drop-shadow(0 -1px 0 rgba(0, 0, 0, 0.06));
+}
+
+.popover.anchor-above .popover-arrow {
+  border-bottom: none;
+  border-top: 7px solid var(--brand-white);
+  top: auto;
+  bottom: 1px;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.06));
 }
 
 .popover-card {
@@ -173,6 +190,11 @@ html, body {
   border-radius: 10px;
   padding: 12px;
   border: 1px solid rgba(237, 41, 41, 0.25);
+}
+.popover-recording-timer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .popover-recording-timer {
   font-family: var(--brand-font-mono);

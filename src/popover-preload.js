@@ -13,4 +13,6 @@ contextBridge.exposeInMainWorld('popoverAPI', {
   openSettings: () => ipcRenderer.invoke('popover:openSettings'),
   signIn: () => ipcRenderer.invoke('popover:signIn'),
   stopRecording: () => ipcRenderer.invoke('popover:stopRecording'),
+  openWindow: () => ipcRenderer.invoke('popover:openWindow'),
+  joinDetected: () => ipcRenderer.invoke('popover:joinDetected'),
 });

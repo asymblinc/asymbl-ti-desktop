@@ -79,13 +79,25 @@ function pillText(current) {
 }
 
 function iconFor(current) {
-  const suffix = process.env.NODE_ENV === 'development' ? '' : ''; // reserved for @2x/@3x selection if scaleFactor matters later
-  const file = current === 'recording' ? 'tray-icon-recording.png' : 'tray-icon-template.png';
-  const image = nativeImage.createFromPath(path.join(ASSETS_DIR, file));
-  // Template images get OS-tinted for light/dark menu bars automatically;
-  // the recording variant is intentionally NOT a template (red is the
-  // point - §12 "red belongs to recording only").
-  image.setTemplateImage(current !== 'recording');
+  if (current === 'recording') {
+    // Red is never a template image on any platform - §12 "red belongs to
+    // recording only", the color itself is the signal.
+    const image = nativeImage.createFromPath(path.join(ASSETS_DIR, 'tray-icon-recording.png'));
+    image.setTemplateImage(false);
+    return image;
+  }
+  if (process.platform === 'darwin') {
+    // Template images get OS-tinted for light/dark menu bars automatically.
+    const image = nativeImage.createFromPath(path.join(ASSETS_DIR, 'tray-icon-template.png'));
+    image.setTemplateImage(true);
+    return image;
+  }
+  // Windows/Linux: no template-image auto-tinting exists, so the macOS
+  // pure-black glyph is invisible on a dark taskbar (confirmed via review +
+  // OpenWhispr's real Windows icon, which is a separate colored .ico/.png,
+  // never the macOS template asset). Use the colored, haloed variant.
+  const image = nativeImage.createFromPath(path.join(ASSETS_DIR, 'tray-icon-win.png'));
+  image.setTemplateImage(false);
   return image;
 }
 
@@ -113,15 +125,27 @@ function pushStateToPopover(current) {
     recording: state.recording ? { platform: state.recording.platform, startedAt: state.recording.startedAt, elapsedSeconds: (Date.now() - state.recording.startedAt) / 1000 } : null,
     uploadProgress: state.uploadProgress,
     lockedMessage: state.lockedMessage,
+    // Cross-platform rendering hints (review, 2026-07-23): the renderer
+    // can't call process.platform or know popover placement itself.
+    platform: process.platform,
+    popoverPosition: lastPopoverPosition,
   });
 }
+
+// Built fresh on every render() so it always reflects the current state
+// (Stop & Save only while recording); popped up manually on right-click
+// only (see ensureTray) - never passed to tray.setContextMenu(). Confirmed
+// by actually running the app (2026-07-23): setContextMenu() makes macOS
+// show that menu on ANY click, left or right, regardless of a separate
+// 'click' listener - it was firing alongside the custom popover on every
+// left-click, not instead of it.
+let contextMenu = null;
 
 /** Native, main-process-owned context menu (right-click) - the crash-safe
  * fallback for Stop (spec N3). Only a plain-text Menu; no custom styling
  * possible here, which is fine, this menu exists for reliability, not
  * pixel-matching. */
 function rebuildContextMenu(current) {
-  if (!tray) return;
   const template = [];
   if (current === 'recording') {
     template.push({ label: 'Stop & Save', click: () => onActionCallback?.('stopRecording') });
@@ -129,7 +153,7 @@ function rebuildContextMenu(current) {
   template.push({ label: 'Open Recall', click: () => focusMainWindow() });
   template.push({ type: 'separator' });
   template.push({ label: 'Quit Recall', click: () => app.quit() });
-  tray.setContextMenu(Menu.buildFromTemplate(template));
+  contextMenu = Menu.buildFromTemplate(template);
 }
 
 function focusMainWindow() {
@@ -149,6 +173,12 @@ function ensurePopoverWindow() {
     resizable: false,
     fullscreenable: false,
     skipTaskbar: true,
+    // alwaysOnTop is load-bearing, not decorative: without it the popover
+    // is an ordinary window that other app windows can cover, breaking the
+    // "floats above everything, attached to the tray icon" illusion every
+    // tray-popover pattern (menubar, Slack, Dropbox) depends on - confirmed
+    // via research (2026-07-23) rather than assumed.
+    alwaysOnTop: true,
     backgroundColor: '#00000000',
     transparent: true,
     webPreferences: {
@@ -158,12 +188,31 @@ function ensurePopoverWindow() {
     },
   });
   popoverWindow.loadURL(POPOVER_WINDOW_WEBPACK_ENTRY);
+  // setAlwaysOnTop's level param (beyond the constructor option) is what
+  // actually keeps a tray popover above other topmost windows (Zoom/Teams
+  // in a call, other tray flyouts) on both platforms - confirmed via
+  // review, 2026-07-23. 'pop-up-menu' is the level Electron docs recommend
+  // for exactly this kind of transient attached UI.
+  popoverWindow.setAlwaysOnTop(true, 'pop-up-menu');
   // Dismiss on outside click (spec §3 "Popover dismisses on outside
   // click/Esc") - blur is the standard signal for a focusable frameless
-  // popover losing focus to anywhere else.
+  // popover losing focus to anywhere else. Grace period guards against the
+  // show()+focus() sequence itself firing an immediate blur before the user
+  // has done anything (a real race on Windows per review, 2026-07-23).
+  let blurArmedAt = 0;
   popoverWindow.on('blur', () => {
+    if (Date.now() < blurArmedAt) return;
     if (popoverWindow && !popoverWindow.isDestroyed()) popoverWindow.hide();
   });
+  popoverWindow.on('show', () => {
+    blurArmedAt = Date.now() + 200;
+  });
+  // Windows gotcha (not yet testable on this dev machine - no Windows box
+  // available): mixing `transparent: true` with `backgroundColor` can
+  // produce GPU rendering artifacts on some Windows driver/GPU combos
+  // (research, 2026-07-23). macOS's transparent+shadow rendering is solid,
+  // so this is left as-is; re-test this exact config on real Windows
+  // hardware and prefer backgroundColor-only if artifacts appear.
   popoverWindow.webContents.on('did-finish-load', () => pushStateToPopover(computeState()));
   return popoverWindow;
 }
@@ -180,22 +229,62 @@ function togglePopover() {
   pushStateToPopover(computeState());
 }
 
-/** N5: opens on the display where the menu bar was clicked, not always the
- * primary display - screen.getDisplayNearestPoint anchors to the tray
- * icon's own bounds, not the app's current window. */
+// Set by positionPopover(), read by pushStateToPopover() so the renderer
+// can flip the popover's arrow to point at the icon rather than into empty
+// space - 'below'/'above' describe the popover's placement RELATIVE TO THE
+// TRAY ICON (below = arrow at the popover's own top edge, pointing up at
+// the icon above it; above = arrow at the bottom edge, pointing down).
+let lastPopoverPosition = 'below';
+
+/** N5 + real cross-platform tray placement: opens on the display where the
+ * menu bar/tray was clicked (not always the primary display), and places
+ * the popover below or above the icon depending on which edge of the
+ * screen the tray actually sits on (macOS: top menu bar, popover below;
+ * Windows: taskbar is commonly bottom but can be top/left/right) - decided
+ * by comparing the tray's own bounds to the display's work area rather
+ * than hardcoding by platform, so a Windows box with a top-docked taskbar
+ * still gets "popover below" placement the same way macOS always does. */
 function positionPopover(win) {
-  const trayBounds = tray.getBounds();
-  const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+  let trayBounds = tray.getBounds();
+  const display = trayBounds.width > 0
+    ? screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y })
+    : screen.getPrimaryDisplay();
+  // Zero/empty bounds happen when the icon is in the Windows overflow
+  // ("^") tray, before first paint, or on some DPI/virtual-desktop setups
+  // (review finding, 2026-07-23) - fall back to a corner near where a tray
+  // icon conventionally lives (top-right on macOS, bottom-right on
+  // Windows/Linux) rather than anchoring to a nonsense {0,0,0,0} rect.
+  if (trayBounds.width === 0 && trayBounds.height === 0) {
+    trayBounds = process.platform === 'darwin'
+      ? { x: display.workArea.x + display.workArea.width - 40, y: display.workArea.y, width: 24, height: 24 }
+      : { x: display.workArea.x + display.workArea.width - 40, y: display.workArea.y + display.workArea.height, width: 24, height: 0 };
+  }
   const [winWidth, winHeight] = win.getSize();
   let x = Math.round(trayBounds.x + trayBounds.width / 2 - winWidth / 2);
   x = Math.min(Math.max(x, display.workArea.x + 4), display.workArea.x + display.workArea.width - winWidth - 4);
-  const y = process.platform === 'darwin' ? Math.round(trayBounds.y + trayBounds.height) : Math.round(trayBounds.y - winHeight);
+
+  // Is there more room below the icon than above it? Below-icon placement
+  // needs headroom under the icon (macOS menu bar case); above-icon
+  // placement needs headroom above it (Windows bottom-taskbar case).
+  const spaceBelow = display.workArea.y + display.workArea.height - (trayBounds.y + trayBounds.height);
+  const spaceAbove = trayBounds.y - display.workArea.y;
+  const popoverPosition = spaceBelow >= winHeight || spaceBelow >= spaceAbove ? 'below' : 'above';
+  let y = popoverPosition === 'below' ? Math.round(trayBounds.y + trayBounds.height) : Math.round(trayBounds.y - winHeight);
+  y = Math.min(Math.max(y, display.workArea.y + 4), display.workArea.y + display.workArea.height - winHeight - 4);
+
   win.setPosition(x, y, false);
+  lastPopoverPosition = popoverPosition;
 }
 
 function registerPopoverActionHandlers(handlers) {
   onActionCallback = (action, ...args) => handlers[action]?.(...args);
   const wire = (channel, action) => {
+    // removeHandler before handle makes this idempotent - ipcMain.handle
+    // throws "Attempted to register a second handler" if initTray is ever
+    // called more than once (review finding, 2026-07-23); removeHandler is
+    // a documented no-op when nothing is registered yet, so this is safe
+    // on the very first call too.
+    ipcMain.removeHandler(channel);
     ipcMain.handle(channel, async (_event, ...args) => {
       popoverWindow?.hide();
       return handlers[action]?.(...args);
@@ -208,6 +297,12 @@ function registerPopoverActionHandlers(handlers) {
   wire('popover:startUnscheduledCall', 'startUnscheduledCall');
   wire('popover:openLibrary', 'openLibrary');
   wire('popover:openSettings', 'openSettings');
+  // These two actions existed in the popover's UI (Open window on the
+  // recording card, Start capture on the meeting-detected card) but had no
+  // dispatch case at all in popover-renderer.js - dead buttons on every
+  // platform, not just Windows (review finding, 2026-07-23).
+  wire('popover:openWindow', 'openWindow');
+  wire('popover:joinDetected', 'joinDetected');
 }
 
 function ensureTray() {
@@ -228,6 +323,11 @@ function ensureTray() {
     }
     togglePopover();
   });
+  // Manual popUpContextMenu on right-click only - see contextMenu's comment
+  // above for why setContextMenu() is never used.
+  tray.on('right-click', () => {
+    if (contextMenu) tray.popUpContextMenu(contextMenu);
+  });
   rebuildContextMenu(computeState());
 }
 
@@ -246,10 +346,45 @@ function initTray(mainWindow, handlers) {
   render();
 }
 
+// render() only runs on discrete state-change events (meeting detected,
+// upload progress, the 5-min next-event refresh, etc.) - with no periodic
+// tick of its own, the OS tray pill's elapsed time ("● 12:41") would only
+// update whenever some UNRELATED event happened to fire next, which during
+// a quiet call could mean it never updates again after the initial
+// "00:00" - a real desync bug (found via direct question, 2026-07-23), not
+// hypothetical: the popover's own elapsed timer already ticks correctly
+// (popover-renderer.js has its own local setInterval reading the same
+// startedAt timestamp), but the native pill had no equivalent. This
+// interval is the pill's equivalent tick, scoped to only run while
+// recording so it doesn't burn CPU/battery the rest of the time.
+let pillTickInterval = null;
+
 /** Kept for main.js's existing call sites (recording-started/-ended) -
  * spec §6 migration note: don't break this input shape. */
 function setRecordingActive(active, info = {}) {
-  state.recording = active ? { platform: info.platform || 'unknown', startedAt: Date.now() } : null;
+  // startedAt is optional (falls back to capturing our own Date.now()) so
+  // this doesn't break if some future call site doesn't have one to pass -
+  // main.js's 'recording-started' handler does pass it, sharing the exact
+  // same timestamp activeRecordings.addRecording() gets, instead of each
+  // capturing an independent one a few ticks apart (TODOS.md #13, fixed
+  // 2026-07-23).
+  state.recording = active ? { platform: info.platform || 'unknown', startedAt: info.startedAt || Date.now() } : null;
+  if (pillTickInterval) {
+    clearInterval(pillTickInterval);
+    pillTickInterval = null;
+  }
+  if (active) {
+    // Only the pill (tray.setTitle, darwin-only) needs to re-render on this
+    // tick - full render() also rebuilds the context menu and re-sends the
+    // popover state, which pushStateToPopover already recomputes
+    // elapsedSeconds fresh from startedAt on its own whenever it IS called,
+    // so a lighter per-second tick here is enough for the pill specifically.
+    pillTickInterval = setInterval(() => {
+      if (tray && process.platform === 'darwin' && computeState() === 'recording') {
+        tray.setTitle(pillText('recording'));
+      }
+    }, 1000);
+  }
   render();
 }
 

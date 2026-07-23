@@ -57,7 +57,24 @@ Given dev/testing is macOS-only right now, recommendation: build the macOS behav
 
 ## 3.6. Popover architecture (resolved, not left implicit per Finding 3)
 
-The popover is a real `BrowserWindow` (`popover_window`, second webpack entry point), not a native Tray context menu — a native macOS menu cannot render the design's custom cards/gradients/buttons. This means the popover's renderer can crash independently of the tray. Mitigation: a native, main-process-owned right-click context menu (`Tray.setContextMenu`) always offers "Stop & Save" while recording, satisfying spec N3 ("Stop must work even if all windows are dead") without depending on the popover's renderer being alive.
+The popover is a real `BrowserWindow` (`popover_window`, second webpack entry point), not a native Tray context menu — a native macOS menu cannot render the design's custom cards/gradients/buttons. This means the popover's renderer can crash independently of the tray. Mitigation: a native, main-process-owned right-click context menu always offers "Stop & Save" while recording, satisfying spec N3 ("Stop must work even if all windows are dead") without depending on the popover's renderer being alive. **Built via `tray.popUpContextMenu(menu)` on an explicit `right-click` listener, never `tray.setContextMenu()`** — see §3.8, that distinction was the exact cause of a real bug found by manually running the app.
+
+## 3.8. Post-ship hardening round (2026-07-23) — cross-platform correctness + a real bug found by using the app
+
+Owner asked for the tray/popover to be genuine cross-platform (Windows + macOS both, not deferred) and to cross-check the implementation against research and independent model review before calling it done. Sequence:
+
+1. **Research** (Perplexity): confirmed frameless `alwaysOnTop` `BrowserWindow` is still the standard 2026 Electron tray-popover pattern (no native alternative exists); surfaced that the shipped `ensurePopoverWindow()` was missing `alwaysOnTop: true` entirely — a real, load-bearing gap (without it, the popover is an ordinary window other app windows can cover). Fixed immediately.
+2. **Prior art** (OpenWhispr, real cross-platform Electron app, `src/helpers/tray.js`): confirmed the `nativeImage` + `setTemplateImage(true)` (macOS-only) pattern already in use here is correct, and confirmed Windows needs its **own, separately-colored icon asset** — macOS's auto-tinted black template glyph is invisible on a dark Windows taskbar. OpenWhispr ships a distinct `.ico`/`.png` for non-macOS for exactly this reason.
+3. **Independent adversarial review** (grok CLI, file:line-grounded): codex and gemini CLI reviews both failed to produce usable output in this environment (consistent with this session's prior experience — noted, not silently retried). Grok's review found genuine, confirmed bugs:
+   - `dispatchAction` in `popover-renderer.js` had no cases for `openWindow`/`joinDetected` — two buttons in the UI were dead on **every** platform, not just Windows.
+   - `registerPopoverActionHandlers` would throw "second handler" if `initTray` were ever called twice (defensive gap, not currently reachable but cheap to close).
+   - Popover Y-position was never clamped, and the anchor calculation assumed a bottom-only taskbar with no zero-bounds guard (Windows overflow tray icons report `{0,0,0,0}` bounds).
+   - The popover's arrow always pointed the "below-icon" direction regardless of actual placement.
+4. **Real-app bug, found only by running the app and clicking it** (not caught by any research pass or automated review): left-click was showing **both** the custom popover **and** the native context menu simultaneously. Root cause — `tray.setContextMenu(menu)` on macOS makes the OS show that menu on **any** click, left or right, independent of a separate `'click'` listener. Fix: build the `Menu` object but never call `setContextMenu()`; pop it up manually via `tray.popUpContextMenu(menu)` inside an explicit `'right-click'` listener. This is the kind of bug that visual/structural verification (screenshots, mocked IPC) cannot catch — it only showed up when the owner actually clicked the real tray icon in the real running app.
+
+**What shipped from this round:** Windows-specific colored+haloed icon (`tray-icon-win.png`/`@2x`, `scripts/gen-tray-icons.js`), platform-aware popover anchor placement (above/below, clamped, zero-bounds-safe) with a CSS arrow flip, platform-aware keyboard hint text (`Ctrl+` vs `⌘`), the two dead-button fixes, IPC handler idempotency, an `alwaysOnTop` level (`'pop-up-menu'`) plus a blur-race grace period, and the left-click/right-click menu fix above.
+
+**Still not verified**: no physical Windows machine was available to test on — the Windows code path is now real and reasoned through (not a stub), but only macOS has been exercised end-to-end by actually running the app. Logged as the residual gap in TODOS.md #12 rather than claimed as fully verified.
 
 ## 3.7. Verification
 
@@ -69,5 +86,5 @@ Visually verified via the webpack dev server (`localhost:3000/popover_window`) w
 
 - `pre-meeting`/"Next on calendar" card, `paused` state, `attention` state (D1).
 - Pause/resume capture capability itself (separate from the tray UI for it).
-- Windows/Linux tray implementation, multi-display popover positioning testing.
+- Windows/Linux tray implementation is no longer deferred (§3.8, per owner request) — real platform-aware icon/positioning/keyboard-hint code shipped, but untested on physical Windows hardware (no machine available). Multi-display popover positioning likewise implemented (display-nearest-to-tray logic) but unverified beyond this single-display dev machine.
 - Right-click quick menu and ⌥-click shortcut (spec §3 "Interactions") - real scope, deferred alongside the states that need them least (Stop/Pause quick actions depend on states not shipping this pass); left-click popover toggle + existing recording click-to-focus behavior ship now.

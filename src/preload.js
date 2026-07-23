@@ -38,5 +38,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startLogin: () => ipcRenderer.invoke('startLogin'),
   getAuthStatus: () => ipcRenderer.invoke('getAuthStatus'),
   signOut: () => ipcRenderer.invoke('signOut'),
-  onAuthStatusChanged: (callback) => ipcRenderer.on('auth-status-changed', () => callback())
+  onAuthStatusChanged: (callback) => ipcRenderer.on('auth-status-changed', () => callback()),
+  onTriggerNewNote: (callback) => ipcRenderer.on('trigger-new-note', () => callback())
 });

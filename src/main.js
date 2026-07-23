@@ -304,9 +304,27 @@ app.whenReady().then(() => {
     // no Pre-Brief window exists yet to route to.
     openPreBrief: () => focusMainWindowFromTray(),
     skip: () => {},
-    startUnscheduledCall: () => focusMainWindowFromTray(),
+    // Real action, not a focus-only placeholder: reuses createNewMeeting()
+    // (renderer.js), the exact function the in-app "Record In-person
+    // Meeting" button already calls - focus first so the user sees the new
+    // note appear, then trigger it via the IPC round-trip added for this.
+    startUnscheduledCall: () => {
+      focusMainWindowFromTray();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('trigger-new-note');
+      }
+    },
     openLibrary: () => focusMainWindowFromTray(),
     openSettings: () => focusMainWindowFromTray(),
+    // Recording card's "Open window" - same action as clicking the tray
+    // icon itself while recording (focus the main window with the live
+    // note/transcript, not a separate window that doesn't exist).
+    openWindow: () => focusMainWindowFromTray(),
+    // Meeting-detected card's "Start capture" - reuses the exact same
+    // main-process function the existing desktop-notification "Record"
+    // action already calls (main.js's notification.on('action', ...)),
+    // rather than duplicating that join logic a third time.
+    joinDetected: () => joinDetectedMeeting(),
   });
 
   function focusMainWindowFromTray() {
@@ -355,13 +373,17 @@ const activeRecordings = {
   // Map of recordingId -> {noteId, platform, state}
   recordings: {},
 
-  // Register a new recording
-  addRecording: function (recordingId, noteId, platform = 'unknown') {
+  // Register a new recording. startTime is optional (defaults to now) so
+  // the two other call sites (main.js:1222,1429) are unaffected - only the
+  // 'recording-started' SDK handler passes one explicitly, to share the
+  // exact same timestamp it also gives tray.js rather than each capturing
+  // its own Date.now() a few ticks apart (TODOS.md #13, fixed 2026-07-23).
+  addRecording: function (recordingId, noteId, platform = 'unknown', startTime = new Date()) {
     this.recordings[recordingId] = {
       noteId,
       platform,
       state: 'recording',
-      startTime: new Date()
+      startTime
     };
     console.log(`Recording registered in global state: ${recordingId} for note ${noteId}`);
   },
@@ -874,12 +896,15 @@ function initSDK() {
     }
 
     console.log("Recording started for window:", window.id);
+    // One timestamp, shared - not two independent Date.now() captures a
+    // few JS ticks apart (TODOS.md #13, fixed 2026-07-23).
+    const startedAtMs = Date.now();
     if (noteId) {
-      activeRecordings.addRecording(window.id, noteId, window.platform || 'unknown');
+      activeRecordings.addRecording(window.id, noteId, window.platform || 'unknown', new Date(startedAtMs));
     }
     updater.setRecordingActive(true); // F10-R4: never force-restart mid-recording
     currentRecordingWindowId = window.id;
-    tray.setRecordingActive(true, { platform: window.platform || 'unknown' });
+    tray.setRecordingActive(true, { platform: window.platform || 'unknown', startedAt: startedAtMs });
   });
 
   RecallAiSdk.addEventListener('recording-ended', async evt => {

@@ -231,6 +231,14 @@ window.electronAPI.onAuthStatusChanged?.(() => {
   refreshAuthUi();
 });
 
+// Screen 01: tray's "Start an unscheduled call" reuses the exact same
+// createNewMeeting() the in-app "Record In-person Meeting" button already
+// calls (renderer.js:1871), rather than main.js duplicating that note-
+// creation logic - createNewMeeting is only defined in this file.
+window.electronAPI.onTriggerNewNote?.(() => {
+  createNewMeeting();
+});
+
 // Group past meetings by date
 let pastMeetingsByDate = {};
 

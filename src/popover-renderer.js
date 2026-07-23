@@ -137,7 +137,14 @@ function renderLocked(message) {
 
 function renderRecording(rec) {
   const card = el('div', { className: 'popover-recording-card' });
-  card.appendChild(el('div', { className: 'popover-recording-timer', text: formatElapsed(rec.elapsedSeconds || 0) }));
+  // Reuses the same .recall-pulse animation screen 00's gate + brand-ui.js
+  // already define in index.css (imported at the top of this file) -
+  // spec §3 "elapsed timer... live session card" implies a live indicator,
+  // not just static text; this was missing entirely until this pass.
+  const timerRow = el('div', { className: 'popover-recording-timer-row' });
+  timerRow.appendChild(el('span', { className: 'recall-pulse' }));
+  timerRow.appendChild(el('span', { className: 'popover-recording-timer', text: formatElapsed(rec.elapsedSeconds || 0) }));
+  card.appendChild(timerRow);
   card.appendChild(el('div', { className: 'popover-recording-meta', text: PLATFORM_NAMES[rec.platform] || rec.platform || 'Recording' }));
   card.appendChild(el('div', {
     className: 'popover-event-actions',
@@ -184,11 +191,30 @@ function setContent(node) {
   content.replaceChildren(node);
 }
 
+let kbdHintsWired = false;
+function wireKbdHints(platform) {
+  // Static across renders (only depends on platform, not app state) - do
+  // this once rather than re-querying/re-writing on every render() call.
+  if (kbdHintsWired) return;
+  kbdHintsWired = true;
+  const modifier = platform === 'darwin' ? '⌘' : 'Ctrl+';
+  document.querySelectorAll('.popover-row-kbd[data-kbd]').forEach((elm) => {
+    elm.textContent = `${modifier}${elm.dataset.kbd}`;
+  });
+}
+
 function render(state) {
   const options = document.getElementById('options');
   const avatar = document.getElementById('avatar');
   const footerName = document.getElementById('footerName');
   const footerVersion = document.getElementById('footerVersion');
+
+  wireKbdHints(state.platform);
+  // Flip the arrow to point at the tray icon regardless of whether the
+  // popover ended up above or below it (Windows bottom-taskbar vs macOS
+  // top-menu-bar) - main process decides placement in positionPopover(),
+  // this just reflects that choice visually (review finding, 2026-07-23).
+  document.getElementById('popover').classList.toggle('anchor-above', state.popoverPosition === 'above');
 
   footerVersion.textContent = state.version ? `v${state.version}` : '';
   if (state.user?.name) {
@@ -255,6 +281,12 @@ function dispatchAction(action) {
     case 'startUnscheduledCall': return window.popoverAPI.startUnscheduledCall();
     case 'openLibrary': return window.popoverAPI.openLibrary();
     case 'openSettings': return window.popoverAPI.openSettings();
+    // These two buttons (recording card's "Open window", meeting-detected
+    // card's "Start capture") had markup and CSS but no dispatch case at
+    // all - dead on every platform, not just Windows (review finding,
+    // 2026-07-23).
+    case 'openWindow': return window.popoverAPI.openWindow();
+    case 'joinDetected': return window.popoverAPI.joinDetected();
     default: return undefined;
   }
 }
