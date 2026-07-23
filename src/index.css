@@ -1374,3 +1374,316 @@ body {
   cursor: pointer;
   padding: 5px;
 }
+
+/* ==========================================================================
+   Screen 00 - Sign in (unauthenticated), design canvas §12 indigo bookend.
+   Shown/hidden by refreshAuthUi() in renderer.js.
+   ========================================================================== */
+
+/* recall-pulse/.recall-wave-bar: brand-ui.js's recDot()/waveform() helpers
+   already reference these class names, but the keyframes were never added
+   to this file - this screen is the first real consumer. */
+@keyframes recall-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.4; }
+}
+.recall-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand-record-red);
+  animation: recall-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes recall-wave {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+.recall-wave-bar {
+  width: 2px;
+  background: var(--brand-record-red);
+  border-radius: 1px;
+  animation: recall-wave 0.9s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.auth-gate {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  font-family: var(--brand-font);
+}
+
+.auth-gate-hero {
+  background: var(--brand-grad-indigo);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  padding: 36px 40px;
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-gate-blob {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.auth-gate-blob-blue {
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(3, 143, 248, 0.28), transparent 65%);
+  top: -140px;
+  right: -160px;
+}
+.auth-gate-blob-purple {
+  width: 340px;
+  height: 340px;
+  background: radial-gradient(circle, rgba(136, 86, 255, 0.22), transparent 65%);
+  bottom: -120px;
+  left: -120px;
+}
+
+.auth-gate-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  color: #fff;
+  position: relative;
+  z-index: 1;
+}
+.auth-gate-wordmark-by {
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 400;
+}
+.auth-gate-wordmark-dot {
+  color: var(--brand-record-red);
+  font-weight: 700;
+}
+
+.auth-gate-hero-spacer {
+  flex: 1;
+}
+
+.auth-gate-hero-content {
+  position: relative;
+  z-index: 1;
+}
+
+.auth-gate-headline {
+  font-family: var(--brand-font);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-size: 34px;
+  line-height: 1.08;
+  margin-bottom: 14px;
+}
+
+.auth-gate-subhead {
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.6;
+  max-width: 340px;
+  margin-bottom: 26px;
+}
+
+.auth-gate-vignette {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--brand-r-md);
+  padding: 14px 16px;
+  max-width: 360px;
+  backdrop-filter: blur(6px);
+}
+
+.auth-gate-vignette-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.auth-gate-vignette-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.auth-gate-vignette-quote {
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.88);
+  margin-bottom: 10px;
+}
+
+.auth-gate-highlight {
+  background: rgba(3, 143, 248, 0.35);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.auth-gate-vignette-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.auth-gate-chip {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.auth-gate-footer {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  position: relative;
+  z-index: 1;
+}
+
+.auth-gate-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: var(--brand-white);
+}
+
+.auth-gate-panel-inner {
+  width: 320px;
+  max-width: 100%;
+}
+
+.auth-gate-title {
+  font-family: var(--brand-font);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-size: 24px;
+  color: var(--brand-ink-navy);
+  margin-bottom: 6px;
+}
+
+.auth-gate-panel-subhead {
+  font-size: 13px;
+  color: var(--brand-slate);
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+.auth-gate-btn-primary {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 13.5px;
+  font-family: var(--brand-font);
+  font-weight: 600;
+  color: #fff;
+  background: var(--brand-blue);
+  border: none;
+  border-radius: var(--brand-r-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  box-shadow: var(--brand-shadow);
+}
+.auth-gate-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.auth-gate-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 18px;
+}
+.auth-gate-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+.auth-gate-divider-label {
+  font-size: 10.5px;
+  color: var(--brand-gray);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.auth-gate-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.auth-gate-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.auth-gate-step-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--brand-tint-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.auth-gate-step-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+}
+
+.auth-gate-step-body {
+  font-size: 11.5px;
+  color: var(--brand-slate);
+  line-height: 1.45;
+  margin-top: 1px;
+}
+
+.auth-gate-panel-footer {
+  font-size: 11px;
+  color: var(--brand-gray);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.auth-gate-link {
+  color: var(--brand-blue);
+  font-weight: 500;
+}
+
+/* Small windows: stack instead of squeezing a 50/50 split - the hero's
+   fixed-width content (360px vignette, 340px copy) doesn't reflow, it just
+   gets cut off below ~880px. */
+@media (max-width: 880px) {
+  .auth-gate {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    overflow-y: auto;
+  }
+  .auth-gate-hero {
+    padding: 24px 28px;
+  }
+  .auth-gate-hero-spacer {
+    flex: 0 0 20px;
+  }
+}

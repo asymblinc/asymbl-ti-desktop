@@ -83,6 +83,27 @@ function signInErrorMessage(error, lockedReason) {
   return 'Sign-in failed. Please try again.';
 }
 
+// Shared between the header's small sign-in button and screen 00's gate CTA
+// (added 2026-07-23) - both call the same startLogin() IPC path, they only
+// differ in label. The gate button wraps its label in a span (it also has
+// an icon), the header button doesn't, so update whichever text target the
+// button actually has rather than assuming textContent is the whole button.
+function wireSignInButton(btn, defaultLabel) {
+  const labelEl = btn.querySelector('.auth-gate-btn-label') || btn;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    labelEl.textContent = 'Signing in...';
+    const result = await window.electronAPI.startLogin();
+    if (result.status !== 'success') {
+      console.error('Sign-in failed:', result.error);
+      showToast(signInErrorMessage(result.error, result.lockedReason));
+      labelEl.textContent = defaultLabel;
+    }
+    btn.disabled = false;
+    await refreshAuthUi();
+  });
+}
+
 // Tracks sign-in state for gating recording actions - Record In-person
 // Meeting/Record Meeting should not be usable while signed out (real gap
 // found during end-to-end testing: these worked regardless of auth state).
@@ -101,6 +122,36 @@ async function refreshAuthUi() {
   }
   const { signedIn, email, photoDataUri } = await window.electronAPI.getAuthStatus();
   window.isSignedIn = signedIn;
+
+  // Screen 00: full-bleed gate replaces the whole app while signed out -
+  // except mid-recording, where auth dropping must never yank away the
+  // stop/status controls out from under an in-progress capture (CEO review
+  // finding, 2026-07-23). isSignedIn already reflects the persisted 7-day
+  // refresh token (auth-store.js), not just the in-memory access token, so
+  // an actively-used session doesn't flicker this on across restarts.
+  const authGateView = document.getElementById('authGateView');
+  const appContainer = document.querySelector('.app-container');
+  if (authGateView && appContainer) {
+    const shouldGate = !signedIn && !window.isRecording;
+    authGateView.style.display = shouldGate ? 'grid' : 'none';
+    appContainer.style.display = shouldGate ? 'none' : 'flex';
+    // debugPanel/debugPanelToggle are siblings of .app-container, not
+    // children - hiding the container alone left the gear icon floating
+    // over the gate (found via visual verification screenshot).
+    const debugPanel = document.getElementById('debugPanel');
+    const debugPanelToggle = document.getElementById('debugPanelToggle');
+    if (debugPanel) debugPanel.style.display = shouldGate ? 'none' : '';
+    if (debugPanelToggle) debugPanelToggle.style.display = shouldGate ? 'none' : '';
+    // @recallai/desktop-sdk injects its own floating widget button directly
+    // onto <body> (its host element is a zero-width block with an
+    // internally fixed-position button, so hiding .app-container doesn't
+    // touch it) - also found via visual verification screenshot. Nothing
+    // meeting-related is actionable behind the gate anyway (no home view
+    // to act on its signals), so hiding it is correct, not just cosmetic.
+    const recallWidgetRoot = document.getElementById('id-recall-widget-root');
+    if (recallWidgetRoot) recallWidgetRoot.style.display = shouldGate ? 'none' : '';
+  }
+
   signInBtn.style.display = signedIn ? 'none' : 'block';
   userAvatar.style.display = signedIn ? 'flex' : 'none';
   const newNoteBtn = document.getElementById('newNoteBtn');
@@ -1528,18 +1579,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshAuthUi();
   const signInBtn = document.getElementById('signInBtn');
   if (signInBtn) {
-    signInBtn.addEventListener('click', async () => {
-      signInBtn.disabled = true;
-      signInBtn.textContent = 'Signing in...';
-      const result = await window.electronAPI.startLogin();
-      if (result.status !== 'success') {
-        console.error('Sign-in failed:', result.error);
-        showToast(signInErrorMessage(result.error, result.lockedReason));
-        signInBtn.textContent = 'Sign in with Asymbl';
-      }
-      signInBtn.disabled = false;
-      await refreshAuthUi();
-    });
+    wireSignInButton(signInBtn, 'Sign in with Asymbl');
+  }
+  const authGateSignInBtn = document.getElementById('authGateSignInBtn');
+  if (authGateSignInBtn) {
+    wireSignInButton(authGateSignInBtn, 'Continue with Salesforce');
   }
 
   // Listen for meeting detection status updates
@@ -2164,6 +2208,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       window.isRecording = !window.isRecording;
+      if (!window.isRecording) {
+        // Recording just ended - refreshAuthUi()'s gate guard keeps the
+        // sign-in wall hidden for the whole time isRecording is true (never
+        // yank stop/status controls out from under an active capture), so
+        // if auth actually dropped mid-recording, re-check now instead of
+        // leaving the gate hidden until some unrelated event triggers it.
+        refreshAuthUi();
+      }
 
       // Get the elements inside the button
       const recordIcon = recordButton.querySelector('.record-icon');
