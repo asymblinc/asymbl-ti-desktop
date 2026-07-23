@@ -185,6 +185,9 @@ function ensurePopoverWindow() {
       preload: POPOVER_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
       nodeIntegration: false,
+      // Explicit, matching main.js's mainWindow - see that file's comment.
+      sandbox: true,
+      webSecurity: true,
     },
   });
   popoverWindow.loadURL(POPOVER_WINDOW_WEBPACK_ENTRY);

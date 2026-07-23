@@ -86,6 +86,13 @@ const createWindow = () => {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
       nodeIntegration: false,
+      // Electron 36 already defaults both to these values - explicit here
+      // per the electron-development skill's checklist (sickn33/
+      // agentic-awesome-skills), so the security posture is self-documenting
+      // rather than relying on an implicit default a future Electron
+      // upgrade could silently change.
+      sandbox: true,
+      webSecurity: true,
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f9f9f9',

@@ -133,6 +133,20 @@ The original goal named both explicitly ("secure and performative are part of th
 - **Real production bug found and fixed, not just reviewed:** `/auth/refresh` was crashing on every call (ADR-029) - a genuine availability/security-adjacent issue (a session that can never refresh is a session that silently dies), root-caused via real Cloud Run logs and fixed with a proper per-user SF session, not a workaround.
 - **Real multi-tenancy gap found and documented (not fixed - owner decision):** TODOS.md #18 - the shared Recall.ai API key means recorded interview media isn't isolated per customer today, despite ADR-022's silo-model intent.
 
+### Electron-development skill preflight (sickn33/agentic-awesome-skills)
+
+App-wide, not screen-02-specific, since both windows (`mainWindow`, `tray.js`'s popover) predate this screen - checked directly against the skill's own checklist (fetched live, not from memory):
+
+| Checklist item | Found | Action |
+|---|---|---|
+| `contextIsolation: true`, `nodeIntegration: false` | Already set on both windows | Compliant, no change |
+| `sandbox: true`, `webSecurity: true` | **Not explicit** on either window (Electron 36 defaults both to these values, so no live gap - but implicit, not self-documenting) | **Fixed** - added explicitly to both `main.js`'s `mainWindow` and `tray.js`'s popover window; verified with a live app run + screenshot that nothing regressed (contextBridge/IPC, auth state, dashboard data all still worked identically) before committing |
+| No raw `ipcRenderer` exposed to renderer | Both preloads use `contextBridge.exposeInMainWorld` exclusively (`sdkLoggerBridge`/`electronAPI`/`popoverAPI`) | Compliant |
+| Avoid `ipcRenderer.sendSync()` | Zero usages anywhere in `src/` | Compliant |
+| DevTools only in development | Gated behind `NODE_ENV === 'development'` (and the actual `openDevTools()` call is commented out - more conservative than the checklist requires) | Compliant |
+| User data in `app.getPath('userData')` | `auth-store.js`'s refresh-token/photo persistence already uses it | Compliant |
+| Preload scripts import only what sandboxing allows | Both preloads `require('electron')` only (no other Node built-ins) - fully compatible with `sandbox: true` | Confirmed, not assumed |
+
 ### Performance
 
 - **Polling cadence** (all in `main.js`): `runSessionRefresh` 10 min, `refreshNextEvent`/`refreshTodaySchedule` 5 min each - three lightweight HTTPS calls at low frequency, not a tight loop; matches the pre-existing screen 01 cadence, not a new pattern.
