@@ -66,14 +66,22 @@ function positionWindow(win) {
 }
 
 // [NOT IMPLEMENTED] macOS Focus/DND suppression (spec section 3 "DND / Focus
-// modes"). Researched via Perplexity (2026-07-23): no official Electron/Node
-// API exists for reading Focus/DND state - Apple exposes no public
-// AppleScript dictionary or Electron binding for it. The only real options
-// are reading the private, undocumented ~/Library/DoNotDisturb assertions
-// file or a native (compiled) module, both out of scope for this pass. A
-// stub that always returns "not in DND" would be indistinguishable from
-// not checking at all, so this is left genuinely unimplemented rather than
-// faked - logged in TODOS.md, not silently dropped.
+// modes"). Researched via Perplexity in two passes (2026-07-23), the second
+// specifically checking whether newer APIs close this gap before concluding
+// it's a real blocker: no official Electron/Node API exists for reading
+// Focus/DND state. Explicitly checked and ruled out: (1) AppleScript - no
+// public dictionary exposes it; (2) ActivityKit - iOS/Live-Activities only,
+// unavailable on macOS entirely; (3) NSFocusStatusCenter (macOS 15+) - most
+// likely scoped to apps already participating via a Focus Filter App
+// Extension (or gated behind a special entitlement), not a plain global
+// "is Focus on?" flag a generic Electron app could call - this couldn't be
+// confirmed with 100% certainty (post-training-cutoff API), but the
+// pattern matches every other Focus-related API Apple has shipped. Only
+// remaining real options are the private, undocumented
+// ~/Library/DoNotDisturb assertions file or a compiled native module, both
+// out of scope here. A stub that always returns "not in DND" would be
+// indistinguishable from not checking at all, so this is left genuinely
+// unimplemented rather than faked - logged in TODOS.md, not silently dropped.
 
 function showMeetingNotification(meetingData) {
   if (suppressedMeetingUrls.has(meetingData.meetingUrl)) return;

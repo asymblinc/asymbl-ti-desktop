@@ -45,15 +45,20 @@ html, body {
   flex-shrink: 0;
 }
 
-/* Matches .home-avatar (index.css) exactly - this app already settled on a
-   single blue-tint avatar style rather than the design mock's per-name tone
-   system (coral/sage/sky), consistent with that earlier simplification. */
+/* Corrected 2026-07-23 after a live claude_design MCP render comparison:
+   the rest of this app settled on a single blue-tint avatar (.home-avatar,
+   index.css), but this screen's actual live-rendered design source
+   (desktop/meeting-notification.jsx, Avatar tone="coral") is genuinely
+   pink/coral, not blue - verified by rendering the real design canvas, not
+   assumed from the earlier simplification. Pixel fidelity to this specific
+   screen wins here; --brand-pink/--brand-tint-pink already exist in
+   index.css (unused elsewhere until now), no new tokens invented. */
 .notif-avatar {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--brand-tint-blue);
-  color: #024a82;
+  background: var(--brand-tint-pink);
+  color: #9b1063;
   display: flex;
   align-items: center;
   justify-content: center;
