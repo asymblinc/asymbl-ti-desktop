@@ -99,7 +99,7 @@ async function refreshAuthUi() {
   if (!signInBtn || !userAvatar) {
     return;
   }
-  const { signedIn, email } = await window.electronAPI.getAuthStatus();
+  const { signedIn, email, photoDataUri } = await window.electronAPI.getAuthStatus();
   window.isSignedIn = signedIn;
   signInBtn.style.display = signedIn ? 'none' : 'block';
   userAvatar.style.display = signedIn ? 'flex' : 'none';
@@ -119,14 +119,21 @@ async function refreshAuthUi() {
     joinMeetingBtn.disabled = !window.meetingDetected || !signedIn;
     joinMeetingBtn.title = signedIn ? '' : 'Sign in with Asymbl to record a meeting';
   }
-  // The JWT only carries email, no display name/photo (contracts/
-  // asymbl-jwt-claims.yaml) - initials + a hover tooltip is the honest
-  // version of "show who's signed in" available today; a real name/photo
-  // needs the SF identity fetch + JWT contract extended first.
-  if (signedIn && email) {
+  // Real SF profile photo when the user has one set (fetched fresh on
+  // every login, see control-plane's sf-oauth.ts); falls back to initials
+  // otherwise - not every SF user has a profile photo.
+  if (signedIn && photoDataUri) {
+    userAvatar.style.backgroundImage = `url(${photoDataUri})`;
+    userAvatar.style.backgroundSize = 'cover';
+    userAvatar.style.backgroundPosition = 'center';
+    userAvatar.textContent = '';
+    userAvatar.title = email || '';
+  } else if (signedIn && email) {
+    userAvatar.style.backgroundImage = '';
     userAvatar.title = email;
     userAvatar.textContent = email[0].toUpperCase();
   } else {
+    userAvatar.style.backgroundImage = '';
     userAvatar.removeAttribute('title');
     userAvatar.textContent = '';
   }
@@ -1463,10 +1470,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   const editorPreviewEl = document.getElementById('simple-editor-preview');
   const editorTextareaEl = document.getElementById('simple-editor');
   if (editorPreviewEl && editorTextareaEl) {
-    editorPreviewEl.addEventListener('click', () => {
+    const enterEditMode = () => {
       editorPreviewEl.style.display = 'none';
       editorTextareaEl.style.display = 'block';
       editorTextareaEl.focus();
+    };
+    editorPreviewEl.addEventListener('click', enterEditMode);
+    // Accessibility gap found via CodeRabbit review: the preview was only
+    // mouse-operable despite being made tabindex-focusable - Enter/Space
+    // now trigger the same edit-mode switch as a click.
+    editorPreviewEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        enterEditMode();
+      }
     });
     editorTextareaEl.addEventListener('blur', () => {
       syncEditorPreview(editorTextareaEl.value);
@@ -1711,10 +1728,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                   document.body.appendChild(miniNotification);
                 }
                 miniNotification.classList.remove('fade-out');
-                miniNotification.innerHTML = `
-                  <span class="debug-notification-speaker">${latestEntry.speaker || 'Unknown'}</span>:
-                  <span class="debug-notification-text">${latestEntry.text.slice(0, 40)}${latestEntry.text.length > 40 ? '...' : ''}</span>
-                `;
+                // Real XSS gap found via CodeRabbit review: this used to
+                // interpolate transcript text (speech-recognition output,
+                // not fully trusted) directly into innerHTML. DOM
+                // construction + textContent instead, same as the other
+                // transcript renderers already fixed this session.
+                const excerptText = latestEntry.text.length > 40 ? `${latestEntry.text.slice(0, 40)}...` : latestEntry.text;
+                const speakerSpan = document.createElement('span');
+                speakerSpan.className = 'debug-notification-speaker';
+                speakerSpan.textContent = latestEntry.speaker || 'Unknown';
+                const textSpan = document.createElement('span');
+                textSpan.className = 'debug-notification-text';
+                textSpan.textContent = excerptText;
+                miniNotification.replaceChildren(speakerSpan, document.createTextNode(': '), textSpan);
 
                 // Remove after a short time of no further updates
                 clearTimeout(window.__transcriptNotificationTimeout);

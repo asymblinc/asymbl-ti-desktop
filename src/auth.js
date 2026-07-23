@@ -63,7 +63,11 @@ function handleCallbackUrl(callbackUrl) {
     return;
   }
 
-  authStore.setTokens({ access_token: accessToken, refresh_token: refreshToken });
+  // Absent when the SF user has no profile photo set - authStore falls
+  // back to initials in that case, not an error.
+  const photoDataUri = parsed.searchParams.get('photo_data_uri');
+
+  authStore.setTokens({ access_token: accessToken, refresh_token: refreshToken, photo_data_uri: photoDataUri });
   settlePendingLogins({ status: 'success' });
   notifyAuthStatusChanged();
 }

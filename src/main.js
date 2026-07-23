@@ -153,7 +153,11 @@ app.whenReady().then(() => {
         console.error('Failed to decode access token for display:', error.message);
       }
     }
-    return { signedIn, email };
+    // Real SF profile photo (task: was initials-only) - fetched fresh on
+    // every login by control-plane (sf-oauth.ts), persisted here, falls
+    // back to null (renderer shows initials) if the SF user has none set.
+    const photoDataUri = authStore.getPhotoDataUri();
+    return { signedIn, email, photoDataUri };
   });
   ipcMain.handle('signOut', async () => {
     authStore.clearTokens();
@@ -843,23 +847,38 @@ function initSDK() {
 // Handle saving meetings data
 ipcMain.handle('saveMeetingsData', async (event, data) => {
   try {
-    // Merge field-by-field per meeting ID against the freshest disk state,
-    // rather than overwriting the whole file with the renderer's copy - the
-    // renderer's meetingsData is loaded once and can be stale relative to
-    // concurrent main-process writes (transcript entries, recordingId,
-    // recallRecordingId, notesSessionId). Object.assign(fresh, incoming)
-    // only touches keys the renderer's object actually has, so a field it
-    // never knew about (set independently by main.js) survives the merge -
-    // still respects renderer-side deletions, since the merged array is
-    // built from the renderer's own list of what still exists.
+    // Merge by explicit field ownership against the freshest disk state,
+    // rather than overwriting the whole file with the renderer's copy.
+    // CodeRabbit caught a real flaw in the first version of this fix:
+    // Object.assign(fresh, incoming) copies EVERY key incoming has,
+    // including stale-but-present ones (e.g. the renderer's local
+    // `transcript` array, loaded before a concurrent main-process
+    // transcript update landed) - silently regressing data the renderer
+    // never intended to touch. The renderer's own save flows
+    // (saveCurrentNote, new-note creation) only ever set `title`/`content`
+    // - everything else (transcript, recordingId, notesSessionId,
+    // recallRecordingId, hasSummary, recordingComplete, ...) is
+    // main-process-owned and must survive untouched. Deletion goes through
+    // the dedicated deleteMeeting handler, not this one, so a fresh-only
+    // meeting (created concurrently, e.g. by an auto-detected-meeting
+    // handler, after the renderer's snapshot) is preserved rather than
+    // dropped for not appearing in the renderer's list.
     await fileOperationManager.scheduleOperation(async (currentData) => {
       for (const listKey of ['pastMeetings', 'upcomingMeetings']) {
         const incomingList = data[listKey] || [];
-        const freshById = new Map((currentData[listKey] || []).map((m) => [m.id, m]));
-        currentData[listKey] = incomingList.map((incoming) => {
+        const freshList = currentData[listKey] || [];
+        const freshById = new Map(freshList.map((m) => [m.id, m]));
+
+        for (const incoming of incomingList) {
           const fresh = freshById.get(incoming.id);
-          return fresh ? Object.assign(fresh, incoming) : incoming;
-        });
+          if (fresh) {
+            if (incoming.title !== undefined) fresh.title = incoming.title;
+            if (incoming.content !== undefined) fresh.content = incoming.content;
+          } else {
+            freshList.push(incoming);
+          }
+        }
+        currentData[listKey] = freshList;
       }
       return currentData;
     });

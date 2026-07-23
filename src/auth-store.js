@@ -16,22 +16,48 @@ const { app } = require('electron');
 
 let accessToken = null; // in-memory only, never written to disk
 let refreshToken = null;
+let photoDataUri = null;
 
 function refreshTokenPath() {
   return path.join(app.getPath('userData'), 'refresh-token.enc');
 }
 
-function setTokens({ access_token, refresh_token }) {
+// Not a credential (a profile picture, already fetched fresh on every real
+// login per control-plane's sf-oauth.ts), so a plain file is fine - no
+// safeStorage encryption needed, unlike the refresh token above.
+function photoPath() {
+  return path.join(app.getPath('userData'), 'profile-photo.txt');
+}
+
+function setTokens({ access_token, refresh_token, photo_data_uri }) {
   accessToken = access_token;
   refreshToken = refresh_token;
   if (refresh_token && safeStorage.isEncryptionAvailable()) {
     const encrypted = safeStorage.encryptString(refresh_token);
     fs.writeFileSync(refreshTokenPath(), encrypted);
   }
+  if (photo_data_uri) {
+    photoDataUri = photo_data_uri;
+    fs.writeFileSync(photoPath(), photo_data_uri, 'utf8');
+  }
 }
 
 function getAccessToken() {
   return accessToken;
+}
+
+function getPhotoDataUri() {
+  if (photoDataUri) {
+    return photoDataUri;
+  }
+  try {
+    if (fs.existsSync(photoPath())) {
+      photoDataUri = fs.readFileSync(photoPath(), 'utf8');
+    }
+  } catch (error) {
+    console.error('Failed to load persisted profile photo:', error.message);
+  }
+  return photoDataUri;
 }
 
 function loadPersistedRefreshToken() {
@@ -51,11 +77,19 @@ function loadPersistedRefreshToken() {
 function clearTokens() {
   accessToken = null;
   refreshToken = null;
+  photoDataUri = null;
   try {
     fs.unlinkSync(refreshTokenPath());
   } catch {
     // no-op: file may not exist
   }
+  try {
+    fs.unlinkSync(photoPath());
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('Failed to remove persisted profile photo:', error.message);
+    }
+  }
 }
 
-module.exports = { setTokens, getAccessToken, loadPersistedRefreshToken, clearTokens };
+module.exports = { setTokens, getAccessToken, getPhotoDataUri, loadPersistedRefreshToken, clearTokens };
