@@ -138,6 +138,7 @@
               </svg>
             </div>
             <div class="user-menu" id="userMenu">
+              <div class="user-menu-org" id="userMenuOrg" style="display: none;"></div>
               <div class="user-menu-email" id="userMenuEmail"></div>
               <button class="user-menu-item" id="signOutBtn">Sign out</button>
             </div>
@@ -196,7 +197,27 @@
             <div class="home-empty-card" id="homeEmptySchedule" style="display: none;">
               <div class="home-empty-card-text">Connect a calendar to see more of your day here.</div>
               <button class="home-empty-card-btn" id="homeEmptyNewCaptureBtn">New capture</button>
-              <button class="home-empty-card-btn-ghost" id="homeEmptyConnectCalendarBtn">Connect calendar</button>
+              <div class="cal-conn-wrapper" id="calConnWrapper">
+                <button class="home-empty-card-btn-ghost cal-conn-trigger" id="calConnTrigger">
+                  <span class="cal-conn-dot" id="calConnDot"></span>
+                  <span id="calConnLabel">Connect calendar</span>
+                </button>
+                <div class="cal-conn-menu" id="calConnMenu">
+                  <div class="cal-conn-row" id="calConnRowSf">
+                    <span class="cal-conn-dot"></span>
+                    <span class="cal-conn-name">Salesforce</span>
+                    <span class="cal-conn-state">Connected</span>
+                  </div>
+                  <div class="cal-conn-row cal-conn-row-disabled">
+                    <span class="cal-conn-name">Google Calendar</span>
+                    <span class="cal-conn-state">Coming soon</span>
+                  </div>
+                  <div class="cal-conn-row cal-conn-row-disabled">
+                    <span class="cal-conn-name">Outlook</span>
+                    <span class="cal-conn-state">Coming soon</span>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="home-section-header" style="margin-top: 0;">

@@ -354,6 +354,20 @@ body {
   display: block;
 }
 
+.user-menu-org {
+  padding: 8px 10px 2px;
+}
+.user-menu-org-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-ink-navy);
+}
+.user-menu-org-id {
+  font-size: 11px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  color: var(--brand-gray);
+  margin-top: 1px;
+}
 .user-menu-email {
   padding: 8px 10px;
   font-size: 13px;
@@ -589,6 +603,69 @@ body {
   border-radius: 6px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.cal-conn-wrapper {
+  position: relative;
+  flex-shrink: 0;
+}
+.cal-conn-trigger {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.cal-conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brand-gray);
+  flex-shrink: 0;
+}
+.cal-conn-dot.is-connected {
+  background: var(--brand-green);
+}
+.cal-conn-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 200px;
+  background-color: var(--brand-white);
+  border-radius: var(--brand-r-md);
+  box-shadow: var(--brand-shadow);
+  padding: 6px;
+  z-index: 200;
+}
+.cal-conn-menu.open {
+  display: block;
+}
+.cal-conn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--brand-r-sm);
+  font-size: 12.5px;
+}
+.cal-conn-row .cal-conn-dot {
+  background: var(--brand-green);
+}
+.cal-conn-name {
+  flex: 1;
+  font-weight: 500;
+  color: var(--brand-ink-navy);
+}
+.cal-conn-state {
+  font-size: 11px;
+  color: var(--brand-green);
+  font-weight: 600;
+}
+.cal-conn-row-disabled .cal-conn-name {
+  color: var(--brand-gray);
+}
+.cal-conn-row-disabled .cal-conn-state {
+  color: var(--brand-gray);
+  font-weight: 500;
 }
 
 .home-section-header {

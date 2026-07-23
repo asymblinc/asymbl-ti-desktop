@@ -175,11 +175,19 @@ app.whenReady().then(() => {
     // since this is display-only, not a trust boundary (every real API call
     // is verified server-side regardless of what the UI shows).
     let email = null;
+    // sf_org (18-char org ID) is always present; sf_org_name is best-effort
+    // (control-plane's fetchOrganizationName) - most recruiter profiles lack
+    // "View Setup and Configuration", so this is commonly null. Renderer
+    // falls back to showing just the org ID when it is.
+    let orgId = null;
+    let orgName = null;
     const accessToken = authStore.getAccessToken();
     if (accessToken) {
       try {
         const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf-8'));
         email = payload.email ?? null;
+        orgId = payload.sf_org ?? null;
+        orgName = payload.sf_org_name ?? null;
       } catch (error) {
         console.error('Failed to decode access token for display:', error.message);
       }
@@ -188,7 +196,7 @@ app.whenReady().then(() => {
     // every login by control-plane (sf-oauth.ts), persisted here, falls
     // back to null (renderer shows initials) if the SF user has none set.
     const photoDataUri = authStore.getPhotoDataUri();
-    return { signedIn, email, photoDataUri };
+    return { signedIn, email, photoDataUri, orgId, orgName };
   });
   ipcMain.handle('signOut', async () => {
     authStore.clearTokens();
@@ -231,6 +239,16 @@ app.whenReady().then(() => {
       // that gap; the pre-existing immediate calls + intervals are unaffected.
       refreshNextEvent();
       refreshTodaySchedule();
+      // Same race as above, for the account-menu email: preload.js already
+      // declared 'auth-status-changed' and renderer.js already listens for
+      // it (calls refreshAuthUi()), but nothing ever fired it - the email
+      // decode in getAuthStatus() only has a token to read once this
+      // resolves, so a fresh launch's earlier DOMContentLoaded call to
+      // refreshAuthUi() always saw signedIn=true (persisted refresh token)
+      // but email=null, and nothing re-asked. Real gap found via user
+      // testing 2026-07-23 (account dropdown showed a blank row above
+      // "Sign out").
+      mainWindow.webContents.send('auth-status-changed');
     });
   };
   runSessionRefresh();

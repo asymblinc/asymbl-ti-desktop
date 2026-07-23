@@ -120,7 +120,7 @@ async function refreshAuthUi() {
   if (!signInBtn || !userAvatar) {
     return;
   }
-  const { signedIn, email, photoDataUri } = await window.electronAPI.getAuthStatus();
+  const { signedIn, email, photoDataUri, orgId, orgName } = await window.electronAPI.getAuthStatus();
   window.isSignedIn = signedIn;
   window.currentUserEmail = email || null;
   if (typeof renderHomeConnection === 'function') {
@@ -196,8 +196,49 @@ async function refreshAuthUi() {
   if (userMenuEmail) {
     userMenuEmail.textContent = signedIn && email ? email : '';
   }
+  // orgName is best-effort (control-plane's fetchOrganizationName - most
+  // recruiter SF profiles lack "View Setup and Configuration" needed to read
+  // it, researched 2026-07-23) - shown when available, falls back to just
+  // the org ID (always present, no special permission needed) rather than
+  // hiding the whole row.
+  const userMenuOrg = document.getElementById('userMenuOrg');
+  if (userMenuOrg) {
+    if (signedIn && (orgName || orgId)) {
+      userMenuOrg.style.display = '';
+      userMenuOrg.innerHTML = '';
+      if (orgName) {
+        const nameEl = document.createElement('div');
+        nameEl.className = 'user-menu-org-name';
+        nameEl.textContent = orgName;
+        userMenuOrg.appendChild(nameEl);
+      }
+      if (orgId) {
+        const idEl = document.createElement('div');
+        idEl.className = 'user-menu-org-id';
+        idEl.textContent = orgId;
+        userMenuOrg.appendChild(idEl);
+      }
+    } else {
+      userMenuOrg.style.display = 'none';
+      userMenuOrg.innerHTML = '';
+    }
+  }
   if (!signedIn) {
     document.getElementById('userMenu')?.classList.remove('open');
+  }
+  // Signing in via Salesforce already grants the calendar/Interview__c access
+  // that powers "Today's schedule" - there's no separate "connect calendar"
+  // step for SF, so this reflects sign-in state rather than a dead button
+  // (real gap found via user testing, 2026-07-23: button always read
+  // "Connect calendar" even for an already-connected SF account).
+  const calConnLabel = document.getElementById('calConnLabel');
+  const calConnDot = document.getElementById('calConnDot');
+  if (calConnLabel && calConnDot) {
+    calConnLabel.textContent = signedIn ? 'Salesforce · Connected' : 'Connect calendar';
+    calConnDot.classList.toggle('is-connected', signedIn);
+  }
+  if (!signedIn) {
+    document.getElementById('calConnMenu')?.classList.remove('open');
   }
 }
 
@@ -215,16 +256,29 @@ document.getElementById('signOutBtn')?.addEventListener('click', async () => {
   await refreshAuthUi();
 });
 
+// Calendar-connection dropdown (only Salesforce is real today - Google/
+// Outlook rows are disabled placeholders for TODOS.md #21's future
+// multi-calendar work, shown so the plan is visible rather than hidden).
+document.getElementById('calConnTrigger')?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  document.getElementById('calConnMenu')?.classList.toggle('open');
+});
+
 document.addEventListener('click', (event) => {
   const wrapper = document.getElementById('userMenuWrapper');
   if (wrapper && !wrapper.contains(event.target)) {
     document.getElementById('userMenu')?.classList.remove('open');
+  }
+  const calConnWrapper = document.getElementById('calConnWrapper');
+  if (calConnWrapper && !calConnWrapper.contains(event.target)) {
+    document.getElementById('calConnMenu')?.classList.remove('open');
   }
 });
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     document.getElementById('userMenu')?.classList.remove('open');
+    document.getElementById('calConnMenu')?.classList.remove('open');
   }
 });
 
@@ -1183,7 +1237,12 @@ async function renderHomeConnection() {
     cardEl.innerHTML = '<strong>Microphone access needed.</strong>&nbsp;Grant mic permission in System Settings to capture audio.';
   } else {
     cardEl.className = 'home-connection-card';
-    cardEl.innerHTML = '<strong>Salesforce and mic connected.</strong>&nbsp;Calendar isn\'t connected yet - only Salesforce interviews show on Home.';
+    // The empty-card's calendar-connection dropdown (#calConnMenu) now
+    // covers this same caveat clearly (Salesforce connected, Google/Outlook
+    // coming soon) - repeating it here read as a contradiction once that
+    // shipped ("Salesforce connected" right next to "calendar isn't
+    // connected"), found via user testing 2026-07-23.
+    cardEl.innerHTML = '<strong>Salesforce and mic connected.</strong>&nbsp;Nothing to do here.';
   }
 }
 
@@ -1898,12 +1957,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const homeEmptyNewCaptureBtn = document.getElementById('homeEmptyNewCaptureBtn');
   if (homeEmptyNewCaptureBtn) {
     homeEmptyNewCaptureBtn.addEventListener('click', () => createNewMeeting());
-  }
-  // Honest no-op, same pattern as the hero's Pre-Brief CTA - no Google/Outlook
-  // Calendar OAuth integration exists yet (TODOS.md #13).
-  const homeEmptyConnectCalendarBtn = document.getElementById('homeEmptyConnectCalendarBtn');
-  if (homeEmptyConnectCalendarBtn) {
-    homeEmptyConnectCalendarBtn.addEventListener('click', () => console.log('Calendar connect not yet built (TODOS.md #13)'));
   }
   // homeLibraryLink is wired inside renderMeetings() instead - that section
   // (and the link) is rebuilt on every data reload, so a one-time listener
