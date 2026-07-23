@@ -133,4 +133,27 @@ async function fetchBootstrap() {
   }
 }
 
-module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, fetchBootstrap, CONTROL_PLANE_URL };
+/**
+ * Screen 01 (menu-bar tray "Next on calendar" card) - the signed-in user's
+ * next upcoming SF Event (Activity), not Interview__c: the design's "Open
+ * Pre-Brief" button implies the Pre-Brief API's event_id, and Event is SF's
+ * own native calendar object. Returns null next_event when nothing is
+ * scheduled - a real, valid "nothing next" state, not an error.
+ */
+async function fetchNextEvent() {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) {
+    return { status: 'error', message: 'Not signed in' };
+  }
+  try {
+    const response = await axios.get(`${CONTROL_PLANE_URL}/api/ti/desktop/next-event`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000,
+    });
+    return { status: 'success', nextEvent: response.data.next_event };
+  } catch (error) {
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, fetchBootstrap, fetchNextEvent, CONTROL_PLANE_URL };

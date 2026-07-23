@@ -62,6 +62,18 @@ app.on('open-url', (event, receivedUrl) => {
 
 // Store detected meeting information
 let detectedMeeting = null;
+// Screen 01: the tray's Stop-recording actions (popover button + native
+// right-click menu item) need a windowId to call RecallAiSdk.stopRecording
+// with, same as the renderer-driven stopManualRecording IPC handler - this
+// app only ever has one active recording at a time, so a single tracked id
+// (not a list) matches the existing activeRecordings model.
+let currentRecordingWindowId = null;
+
+const TRAY_LOCKED_MESSAGES = {
+  package_not_installed: 'Your Salesforce org doesn’t have Recall installed. Contact your admin.',
+  license_not_assigned: 'You don’t have a Recall license assigned yet. Contact your admin.',
+  license_revoked: 'Your Recall license has been revoked. Contact your admin.',
+};
 
 let mainWindow;
 
@@ -135,7 +147,12 @@ app.whenReady().then(() => {
 
   // Spec B F2: SF SSO login
   ipcMain.handle('startLogin', async () => {
-    return desktopAuth.startLogin();
+    const result = await desktopAuth.startLogin();
+    if (result.status === 'error' && result.error === 'license_inactive') {
+      tray.setLocked(TRAY_LOCKED_MESSAGES[result.lockedReason] || 'Your Recall license needs attention. Contact your admin.');
+    }
+    refreshTrayAuthState();
+    return result;
   });
   ipcMain.handle('getAuthStatus', async () => {
     const signedIn = !!authStore.getAccessToken() || !!authStore.loadPersistedRefreshToken();
@@ -161,6 +178,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('signOut', async () => {
     authStore.clearTokens();
+    refreshTrayAuthState();
   });
 
   // Spec B F3: token refresh + heartbeat. Access tokens are a 15-min TTL
@@ -189,6 +207,48 @@ app.whenReady().then(() => {
   };
   runSessionRefresh();
   setInterval(runSessionRefresh, 10 * 60 * 1000);
+
+  // Screen 01: tray reflects real sign-in state (isSignedIn signal, same as
+  // the header toggle screen 00 uses) - no display name exists in the JWT
+  // contract (bootstrap.ts's BootstrapResult.user has no `name` field),
+  // so email is the identity string shown in the popover footer, same
+  // fallback the main window's user-avatar tooltip already uses.
+  function refreshTrayAuthState() {
+    const signedIn = !!authStore.getAccessToken() || !!authStore.loadPersistedRefreshToken();
+    if (!signedIn) {
+      tray.setSignedIn(false, null);
+      return;
+    }
+    const accessToken = authStore.getAccessToken();
+    let email = null;
+    if (accessToken) {
+      try {
+        email = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf-8')).email ?? null;
+      } catch {
+        // display-only, same non-fatal handling as getAuthStatus above
+      }
+    }
+    tray.setSignedIn(true, { name: email || 'Signed in', org: '' });
+  }
+  refreshTrayAuthState();
+
+  // Screen 01: "Next on calendar" card - polls the control plane's real SF
+  // Event feed (next-event.ts) rather than push, since there's no existing
+  // push channel for calendar data. 5 min cadence balances freshness against
+  // the pre-meeting state's 15-min countdown window (spec §2) - a 5 min-old
+  // read is never off by more than one bucket of that window.
+  function refreshNextEvent() {
+    if (!authStore.getAccessToken()) {
+      return;
+    }
+    controlPlaneClient.fetchNextEvent().then((result) => {
+      if (result.status === 'success') {
+        tray.setNextEvent(result.nextEvent);
+      }
+    });
+  }
+  refreshNextEvent();
+  setInterval(refreshNextEvent, 5 * 60 * 1000);
 
   // Set up SDK logger IPC handlers
   ipcMain.on('sdk-log', (event, logEntry) => {
@@ -220,7 +280,41 @@ app.whenReady().then(() => {
 
   createWindow();
   updater.initUpdater(mainWindow);
-  tray.initTray(mainWindow);
+  tray.initTray(mainWindow, {
+    signIn: async () => {
+      const result = await desktopAuth.startLogin();
+      if (result.status === 'error' && result.error === 'license_inactive') {
+        tray.setLocked(TRAY_LOCKED_MESSAGES[result.lockedReason] || 'Your Recall license needs attention. Contact your admin.');
+      }
+      refreshTrayAuthState();
+      refreshNextEvent();
+    },
+    stopRecording: async () => {
+      if (!currentRecordingWindowId) return;
+      try {
+        await stopActiveRecording(currentRecordingWindowId);
+      } catch (error) {
+        console.error('Error stopping recording from tray:', error);
+      }
+    },
+    // openPreBrief/skip: the design's "Open Pre-Brief" implies the
+    // contracted Pre-Brief API (prebrief-api.yaml) - full LLM generation is
+    // separately-tracked scope (#22/#23), not built here. Both actions
+    // focus the main window rather than open a dead/fake control, since
+    // no Pre-Brief window exists yet to route to.
+    openPreBrief: () => focusMainWindowFromTray(),
+    skip: () => {},
+    startUnscheduledCall: () => focusMainWindowFromTray(),
+    openLibrary: () => focusMainWindowFromTray(),
+    openSettings: () => focusMainWindowFromTray(),
+  });
+
+  function focusMainWindowFromTray() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
 
   // When the window is ready, send the initial meeting detection status
   mainWindow.webContents.on('did-finish-load', () => {
@@ -552,6 +646,7 @@ function initSDK() {
     });
 
     detectedMeeting = evt;
+    tray.setMeetingDetected(true, evt.window.platform);
 
     // Map platform codes to readable names
     const platformNames = {
@@ -673,6 +768,7 @@ function initSDK() {
     }
 
     detectedMeeting = null;
+    tray.setMeetingDetected(false);
 
     // Send the meeting closed status to the renderer process
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -758,6 +854,7 @@ function initSDK() {
     //   progress
     // });
 
+    tray.setUploadProgress(progress);
     // Update the note with upload progress if needed
     if (progress === 100) {
       console.log(`Upload completed for recording: ${window.id}`);
@@ -781,7 +878,8 @@ function initSDK() {
       activeRecordings.addRecording(window.id, noteId, window.platform || 'unknown');
     }
     updater.setRecordingActive(true); // F10-R4: never force-restart mid-recording
-    tray.setRecordingActive(true);
+    currentRecordingWindowId = window.id;
+    tray.setRecordingActive(true, { platform: window.platform || 'unknown' });
   });
 
   RecallAiSdk.addEventListener('recording-ended', async evt => {
@@ -793,6 +891,7 @@ function initSDK() {
     console.log("Recording stopped for window:", window.id);
     activeRecordings.removeRecording(window.id);
     updater.setRecordingActive(false);
+    currentRecordingWindowId = null;
     tray.setRecordingActive(false);
   });
 
@@ -1133,27 +1232,23 @@ ipcMain.handle('startManualRecording', async (event, meetingId) => {
 });
 
 // Handle stopping a manual desktop recording
+// Shared by the renderer-driven IPC handler below and the tray's Stop
+// actions (popover button + native right-click menu, screen 01) - both need
+// the exact same stopRecording+state-update sequence, just from different
+// call sites (recordingId is known in the renderer's UI state; the tray
+// only knows currentRecordingWindowId, tracked in main.js's own SDK
+// listeners since the tray has no UI state of its own).
+async function stopActiveRecording(windowId) {
+  console.log(`Stopping desktop recording: ${windowId}`);
+  sdkLogger.logApiCall('stopRecording', { windowId });
+  activeRecordings.updateState(windowId, 'stopping');
+  await RecallAiSdk.stopRecording({ windowId });
+  // The recording-ended event fires automatically, handling upload/summary.
+}
+
 ipcMain.handle('stopManualRecording', async (event, recordingId) => {
   try {
-    console.log(`Stopping manual desktop recording: ${recordingId}`);
-
-    // Stop the recording - using the windowId property as shown in the reference
-
-    // Log the stopRecording API call
-    sdkLogger.logApiCall('stopRecording', {
-      windowId: recordingId
-    });
-
-    // Update our active recordings tracker
-    activeRecordings.updateState(recordingId, 'stopping');
-
-    await RecallAiSdk.stopRecording({
-      windowId: recordingId
-    });
-
-    // The recording-ended event will be triggered automatically,
-    // which will handle uploading and generating the summary
-
+    await stopActiveRecording(recordingId);
     return { success: true };
   } catch (error) {
     console.error('Error stopping manual recording:', error);

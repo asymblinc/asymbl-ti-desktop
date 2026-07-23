@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Recall</title>
+  </head>
+  <body>
+    <div class="popover" id="popover">
+      <div class="popover-arrow"></div>
+      <div class="popover-card">
+        <div class="popover-header">
+          <span class="popover-wordmark">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19.5 9.5V4.5H4.5v15h8" stroke="#038FF8" stroke-width="3.2" stroke-linecap="square" fill="none"/><circle cx="17" cy="16.5" r="4.6" fill="#ED2929"/></svg>
+            Recall
+          </span>
+          <span class="popover-chip" id="stateChip">Ready</span>
+        </div>
+
+        <div class="popover-content" id="content"><!-- rendered per-state by popover-renderer.js --></div>
+
+        <div class="popover-options" id="options">
+          <div class="popover-row" data-action="startUnscheduledCall">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#5b6070" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M3 8h10"/></svg>
+            <span class="popover-row-label">Start an unscheduled call</span>
+            <span class="popover-row-kbd">⌘N</span>
+          </div>
+          <div class="popover-row" data-action="openLibrary">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#5b6070" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h4l1.5 1.5h6.5v7h-12z"/></svg>
+            <span class="popover-row-label">Open library</span>
+            <span class="popover-row-kbd">⌘L</span>
+          </div>
+          <div class="popover-row" data-action="openSettings">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#5b6070" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
+            <span class="popover-row-label">Settings</span>
+            <span class="popover-row-kbd">⌘,</span>
+          </div>
+        </div>
+
+        <div class="popover-footer">
+          <span class="popover-avatar" id="avatar">?</span>
+          <span class="popover-footer-name" id="footerName">Not signed in</span>
+          <span class="popover-footer-version" id="footerVersion"></span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

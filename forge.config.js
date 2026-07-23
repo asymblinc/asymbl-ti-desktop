@@ -65,6 +65,19 @@ module.exports = {
                 js: './src/preload.js',
               },
             },
+            {
+              // Screen 01 (menu-bar tray popover) - a separate frameless
+              // BrowserWindow, not a native Tray context menu, since the
+              // design needs custom cards/gradients/buttons a native macOS
+              // menu can't render. Own preload - only exposes what the
+              // popover needs, not the full main-window electronAPI surface.
+              html: './src/popover.html',
+              js: './src/popover-renderer.js',
+              name: 'popover_window',
+              preload: {
+                js: './src/popover-preload.js',
+              },
+            },
           ],
         },
       },
