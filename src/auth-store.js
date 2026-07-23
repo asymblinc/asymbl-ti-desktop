@@ -14,27 +14,40 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 
-let accessToken = null; // in-memory only, never written to disk
-let refreshToken = null;
+// T13 (eng review finding #2/#6): each OAuth provider gets its own in-memory
+// slot and its own encrypted refresh-token file, keyed by `provider`. Before
+// this, a single accessToken/refreshToken pair and one fixed file meant a
+// second provider (Calendar, #21) reusing this module as-is would silently
+// overwrite the SF session's tokens. Every existing call site omits
+// `provider`, so it defaults to 'sf' - zero behavior change for SF login.
+const tokens = {}; // provider -> { accessToken, refreshToken }
 let photoDataUri = null;
 
-function refreshTokenPath() {
+function refreshTokenPath(provider) {
+  return path.join(app.getPath('userData'), `refresh-token-${provider}.enc`);
+}
+
+// Pre-T13 builds stored the (only) provider's refresh token at this
+// unnamespaced path. Only ever read as a one-time migration fallback below,
+// never written to again.
+function legacySfRefreshTokenPath() {
   return path.join(app.getPath('userData'), 'refresh-token.enc');
 }
 
 // Not a credential (a profile picture, already fetched fresh on every real
 // login per control-plane's sf-oauth.ts), so a plain file is fine - no
-// safeStorage encryption needed, unlike the refresh token above.
+// safeStorage encryption needed, unlike the refresh token above. Tied to the
+// SF identity specifically (Calendar OAuth has no profile-photo concept), so
+// this stays unnamespaced rather than keyed by provider.
 function photoPath() {
   return path.join(app.getPath('userData'), 'profile-photo.txt');
 }
 
-function setTokens({ access_token, refresh_token, photo_data_uri }) {
-  accessToken = access_token;
-  refreshToken = refresh_token;
+function setTokens({ access_token, refresh_token, photo_data_uri }, provider = 'sf') {
+  tokens[provider] = { accessToken: access_token, refreshToken: refresh_token };
   if (refresh_token && safeStorage.isEncryptionAvailable()) {
     const encrypted = safeStorage.encryptString(refresh_token);
-    fs.writeFileSync(refreshTokenPath(), encrypted);
+    fs.writeFileSync(refreshTokenPath(provider), encrypted);
   }
   if (photo_data_uri) {
     photoDataUri = photo_data_uri;
@@ -42,8 +55,8 @@ function setTokens({ access_token, refresh_token, photo_data_uri }) {
   }
 }
 
-function getAccessToken() {
-  return accessToken;
+function getAccessToken(provider = 'sf') {
+  return tokens[provider]?.accessToken ?? null;
 }
 
 function getPhotoDataUri() {
@@ -60,34 +73,47 @@ function getPhotoDataUri() {
   return photoDataUri;
 }
 
-function loadPersistedRefreshToken() {
+function loadPersistedRefreshToken(provider = 'sf') {
   try {
-    if (!safeStorage.isEncryptionAvailable() || !fs.existsSync(refreshTokenPath())) {
+    if (!safeStorage.isEncryptionAvailable()) {
       return null;
     }
-    const encrypted = fs.readFileSync(refreshTokenPath());
-    refreshToken = safeStorage.decryptString(encrypted);
+    let tokenFilePath = refreshTokenPath(provider);
+    if (!fs.existsSync(tokenFilePath) && provider === 'sf' && fs.existsSync(legacySfRefreshTokenPath())) {
+      // One-time migration: move the pre-T13 unnamespaced file to the
+      // namespaced path so this fallback is never needed again.
+      const encrypted = fs.readFileSync(legacySfRefreshTokenPath());
+      fs.writeFileSync(tokenFilePath, encrypted);
+      fs.unlinkSync(legacySfRefreshTokenPath());
+    }
+    if (!fs.existsSync(tokenFilePath)) {
+      return null;
+    }
+    const encrypted = fs.readFileSync(tokenFilePath);
+    const refreshToken = safeStorage.decryptString(encrypted);
+    tokens[provider] = { ...tokens[provider], refreshToken };
     return refreshToken;
   } catch (error) {
-    console.error('Failed to load persisted refresh token:', error.message);
+    console.error(`Failed to load persisted refresh token (${provider}):`, error.message);
     return null;
   }
 }
 
-function clearTokens() {
-  accessToken = null;
-  refreshToken = null;
-  photoDataUri = null;
+function clearTokens(provider = 'sf') {
+  delete tokens[provider];
   try {
-    fs.unlinkSync(refreshTokenPath());
+    fs.unlinkSync(refreshTokenPath(provider));
   } catch {
     // no-op: file may not exist
   }
-  try {
-    fs.unlinkSync(photoPath());
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      console.error('Failed to remove persisted profile photo:', error.message);
+  if (provider === 'sf') {
+    photoDataUri = null;
+    try {
+      fs.unlinkSync(photoPath());
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.error('Failed to remove persisted profile photo:', error.message);
+      }
     }
   }
 }

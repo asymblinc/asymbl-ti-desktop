@@ -27,7 +27,13 @@ function notifyAuthStatusChanged() {
 }
 
 const PROTOCOL = 'asymbl-recall';
-const CALLBACK_HOST = 'auth-callback';
+const SF_CALLBACK_HOST = 'auth-callback';
+// T13: host -> provider map, not a single hardcoded host, so a future OAuth
+// provider (Calendar, #21) gets its own callback host and its own
+// auth-store.js token slot by adding one entry here, not a structural
+// change. The control plane's own redirect_uri allowlist (index.ts,
+// ALLOWED_SF_REDIRECT_URIS) needs the matching entry when that provider is built.
+const CALLBACK_HOSTS = { [SF_CALLBACK_HOST]: 'sf' };
 
 let pendingLoginResolvers = [];
 
@@ -46,7 +52,11 @@ function handleCallbackUrl(callbackUrl) {
   } catch {
     return;
   }
-  if (parsed.protocol !== `${PROTOCOL}:` || parsed.hostname !== CALLBACK_HOST) {
+  if (parsed.protocol !== `${PROTOCOL}:`) {
+    return;
+  }
+  const provider = CALLBACK_HOSTS[parsed.hostname];
+  if (!provider) {
     return;
   }
 
@@ -67,7 +77,7 @@ function handleCallbackUrl(callbackUrl) {
   // back to initials in that case, not an error.
   const photoDataUri = parsed.searchParams.get('photo_data_uri');
 
-  authStore.setTokens({ access_token: accessToken, refresh_token: refreshToken, photo_data_uri: photoDataUri });
+  authStore.setTokens({ access_token: accessToken, refresh_token: refreshToken, photo_data_uri: photoDataUri }, provider);
   settlePendingLogins({ status: 'success' });
   notifyAuthStatusChanged();
 }
@@ -90,7 +100,7 @@ function startLogin({ timeoutMs = 5 * 60 * 1000 } = {}) {
     }, timeoutMs);
   });
 
-  const startUrl = `${CONTROL_PLANE_URL}/auth/sf/start?redirect_uri=${encodeURIComponent(`${PROTOCOL}://${CALLBACK_HOST}`)}`;
+  const startUrl = `${CONTROL_PLANE_URL}/auth/sf/start?redirect_uri=${encodeURIComponent(`${PROTOCOL}://${SF_CALLBACK_HOST}`)}`;
   shell.openExternal(startUrl);
   return result;
 }
