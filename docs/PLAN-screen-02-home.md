@@ -42,6 +42,14 @@ Real data available at build time:
 
 Visual pass via `browser-harness` against the webpack dev server, both the idle dashboard and the 02b live-recording variant, with injected mock state (schedule rows, recent captures, needs-attention items, recording on/off) — same technique used for screen 01's popover.
 
+## 6a0. Direct claude_design MCP verification (2026-07-23)
+
+Earlier pixel-fidelity passes worked from local mirrored files (`/Downloads/TI Recall (1)/`) and live screenshots, not the `claude_design` MCP itself. Connected directly to project `019de4a3-82fc-70a7-a039-c5cdb112e5cf` and read the two authoritative sources in the project:
+
+- `tokens.css` (the canvas's own token file) - confirmed identical to the local mirror; found the amber/blue "ink" text colors this build used (`#8a5e00`/`#0264ac`, inherited from screen 01's popover.css) were slightly off from the canonical `#a36d00`/`#0273c4` - fixed in both `index.css` (screen 02) and `popover.css` (screen 01, same tokens).
+- `CLAUDE-CODE-HANDOFF.md` §12 - the file's own precedence comment already in `index.css` (line 16-22) says this doc's colors override the canvas's ("older warm/cream, to be replaced"). §12.1's token block pins `--asy-grad-indigo: linear-gradient(0deg,#191D47,#2C1169)` - **0deg**, not tokens.css's 160deg. First attempted a "fix" toward 160deg (tokens.css value) before reading this doc; reverted immediately once the authoritative override was confirmed - `--brand-grad-indigo` stays at 0deg, matching what was already correct in the code before this pass.
+- Confirmed via `list_files` that the project's `desktop/home.jsx` and `screen-specs/02-home-today.md` are byte-identical in structure/size to the local Downloads mirror this build was actually developed against - the local reference files were accurate, not stale.
+
 ## 6a. Post-build pixel-fidelity pass (2026-07-23, live-screenshot review)
 
 The first pass rendered correctly but was flagged against the design as "not pixel perfect" via direct screenshots of the running app (both the real signed-in app and the Claude Design canvas reference). Fixed in this pass:

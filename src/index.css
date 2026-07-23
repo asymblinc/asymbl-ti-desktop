@@ -294,7 +294,7 @@ body {
 .join-meeting-btn {
   background-color: transparent;
   border: 1.5px solid var(--brand-blue);
-  color: #0264ac;
+  color: #0273c4;
   margin-right: 10px;
   -webkit-app-region: no-drag;
 }
@@ -678,7 +678,7 @@ body {
   border-radius: 999px;
   flex-shrink: 0;
   background: var(--brand-tint-blue);
-  color: #0264ac;
+  color: #0273c4;
 }
 
 .home-recent-row {
@@ -708,7 +708,7 @@ body {
   flex-shrink: 0;
 }
 .home-chip.tone-green { background: var(--brand-tint-green); color: #068a4f; }
-.home-chip.tone-amber { background: var(--brand-tint-yellow); color: #8a5e00; }
+.home-chip.tone-amber { background: var(--brand-tint-yellow); color: #a36d00; }
 .home-chip.tone-gray { background: #f4f6fb; color: var(--brand-gray); }
 .home-chip.tone-red { background: #fde7e7; color: var(--brand-record-red); }
 

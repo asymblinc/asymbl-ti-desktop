@@ -1112,7 +1112,7 @@ function renderHomeAttention() {
   }
 
   const toneBg = { amber: 'var(--brand-tint-yellow)', blue: 'var(--brand-tint-blue)' };
-  const toneFg = { amber: '#8a5e00', blue: '#0264ac' };
+  const toneFg = { amber: '#a36d00', blue: '#0273c4' };
   listEl.innerHTML = DOMPurify.sanitize(items.map((item) => `
     <div class="home-attention-item" data-action="${item.action}" data-meeting-id="${item.meetingId}">
       <div class="home-attention-icon" style="background:${toneBg[item.tone]};color:${toneFg[item.tone]}">${HOME_ATTENTION_ICONS[item.tone]}</div>
