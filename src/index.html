@@ -209,6 +209,30 @@
             </div>
             <div class="home-schedule-list" id="homeScheduleList"></div>
 
+            <!-- Recent captures (spec §2.5) - nested in the left column (not a
+                 grid-level sibling) so it flows immediately after the
+                 schedule regardless of how tall the right rail is; a CSS
+                 grid row is always as tall as its tallest column, so a
+                 sibling-after-the-grid placement left a dead-space gap here
+                 whenever the rail (attention + stats + connection card) was
+                 taller than a short schedule list (real bug, found by the
+                 owner testing with real data). The Library screen (#27)
+                 doesn't exist yet, so this full list IS the history surface
+                 for now - no separate preview list duplicating the same data. -->
+            <main class="main-content">
+              <div class="content-container">
+                <section class="meetings-section">
+                  <div class="home-section-header">
+                    <h2 class="section-title" style="margin-bottom: 0;">Recent captures</h2>
+                    <div class="home-section-rule"></div>
+                    <span class="home-section-link" id="homeLibraryLink">Library →</span>
+                  </div>
+                  <div class="meetings-list" id="notes-list">
+                    <!-- Meeting cards will be inserted here by JavaScript -->
+                  </div>
+                </section>
+              </div>
+            </main>
           </div>
 
           <!-- Right rail -->
@@ -222,24 +246,6 @@
             <div class="home-connection-card" id="homeConnectionCard"></div>
           </div>
         </div>
-
-        <!-- Recent captures (spec §2.5) - the Library screen (#27) doesn't exist
-             yet, so this full list IS the history surface for now; no separate
-             preview list duplicating the same data. -->
-        <main class="main-content">
-          <div class="content-container">
-            <section class="meetings-section">
-              <div class="home-section-header" style="margin-top: 0;">
-                <h2 class="section-title" style="margin-bottom: 0;">Recent captures</h2>
-                <div class="home-section-rule"></div>
-                <span class="home-section-link" id="homeLibraryLink">Library →</span>
-              </div>
-              <div class="meetings-list" id="notes-list">
-                <!-- Meeting cards will be inserted here by JavaScript -->
-              </div>
-            </section>
-          </div>
-        </main>
       </div>
 
       <!-- Note Editor View -->

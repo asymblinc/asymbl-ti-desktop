@@ -210,6 +210,20 @@ app.whenReady().then(() => {
         cachedTenantId = bootstrapResult.bootstrap.user.tenant_id;
         telemetry.initTelemetry(process.env.POSTHOG_API_KEY, bootstrapResult.bootstrap.tenant.features.telemetry_enabled);
       });
+
+      // Real bug found via live testing, 2026-07-23: refreshNextEvent() and
+      // refreshTodaySchedule() below both fire immediately at startup, in
+      // the same tick as this function's own call - but this refresh is
+      // async, so on every fresh app launch (persisted refresh token, no
+      // live in-memory access token yet) their authStore.getAccessToken()
+      // check loses the race and sees null, silently no-opping. Schedule
+      // data then only ever arrived on the next 5-min interval tick, making
+      // a freshly-launched, genuinely-signed-in app show "Nothing
+      // scheduled" for up to 5 minutes even with real events waiting.
+      // Calling them here too - once the token is confirmed fresh - closes
+      // that gap; the pre-existing immediate calls + intervals are unaffected.
+      refreshNextEvent();
+      refreshTodaySchedule();
     });
   };
   runSessionRefresh();
