@@ -2,7 +2,7 @@ require('dotenv').config();
 // F10-R10: must run before other requires so startup crashes are captured too.
 require('./crash-reporter').initCrashReporter();
 
-const { app, BrowserWindow, ipcMain, protocol, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, Notification, globalShortcut } = require('electron');
 // electron-forge start (dev mode) runs the actual node_modules/electron
 // binary, whose bundle identity is baked in as "Electron" before any of our
 // code runs - the Dock hover-tooltip name comes from that, not from the
@@ -280,6 +280,27 @@ app.whenReady().then(() => {
 
   createWindow();
   updater.initUpdater(mainWindow);
+
+  // Named so both the tray popover's click handlers AND the real global
+  // keyboard shortcuts below call the exact same function - spec §5 lists
+  // "P3 unscheduled call via ⌘N" as a real scenario, not decorative hint
+  // text, and until now no shortcut was actually registered (found via
+  // direct question, 2026-07-23: the popover only ever showed "⌘N" as a
+  // <span>, Cmd+N did nothing anywhere in the OS).
+  //
+  // createNewMeeting() (renderer.js) already both creates the note AND
+  // auto-starts manual recording on it (renderer.js:790-821) - re-verified
+  // this directly rather than assuming, since the label ("start a call")
+  // implies both steps.
+  const startUnscheduledCallAction = () => {
+    focusMainWindowFromTray();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('trigger-new-note');
+    }
+  };
+  const openLibraryAction = () => focusMainWindowFromTray();
+  const openSettingsAction = () => focusMainWindowFromTray();
+
   tray.initTray(mainWindow, {
     signIn: async () => {
       const result = await desktopAuth.startLogin();
@@ -304,18 +325,9 @@ app.whenReady().then(() => {
     // no Pre-Brief window exists yet to route to.
     openPreBrief: () => focusMainWindowFromTray(),
     skip: () => {},
-    // Real action, not a focus-only placeholder: reuses createNewMeeting()
-    // (renderer.js), the exact function the in-app "Record In-person
-    // Meeting" button already calls - focus first so the user sees the new
-    // note appear, then trigger it via the IPC round-trip added for this.
-    startUnscheduledCall: () => {
-      focusMainWindowFromTray();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('trigger-new-note');
-      }
-    },
-    openLibrary: () => focusMainWindowFromTray(),
-    openSettings: () => focusMainWindowFromTray(),
+    startUnscheduledCall: startUnscheduledCallAction,
+    openLibrary: openLibraryAction,
+    openSettings: openSettingsAction,
     // Recording card's "Open window" - same action as clicking the tray
     // icon itself while recording (focus the main window with the live
     // note/transcript, not a separate window that doesn't exist).
@@ -333,6 +345,26 @@ app.whenReady().then(() => {
     mainWindow.show();
     mainWindow.focus();
   }
+
+  // Real OS-level global shortcuts (spec §3/§5: "P3 unscheduled call via
+  // ⌘N" is a stated scenario, not decorative hint text) - registered once
+  // at startup, unregistered on quit (app.on('will-quit') below). These
+  // call the exact same functions the popover's rows call, so behavior
+  // never diverges between clicking and pressing the key.
+  // register() fails SILENTLY (returns false, doesn't throw) if another
+  // app already holds that combo - Cmd+, in particular is an extremely
+  // common OS-wide "Preferences" binding other native Mac apps grab first,
+  // so silently trusting registration here would be a real, invisible gap.
+  [
+    ['CommandOrControl+N', startUnscheduledCallAction],
+    ['CommandOrControl+L', openLibraryAction],
+    ['CommandOrControl+,', openSettingsAction],
+  ].forEach(([accelerator, action]) => {
+    const ok = globalShortcut.register(accelerator, action);
+    if (!ok) {
+      console.error(`Failed to register global shortcut ${accelerator} - likely already claimed by another app`);
+    }
+  });
 
   // When the window is ready, send the initial meeting detection status
   mainWindow.webContents.on('did-finish-load', () => {
@@ -360,6 +392,12 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   telemetry.shutdownTelemetry().catch(() => {});
+});
+
+app.on('will-quit', () => {
+  // Electron's own documented pattern - global shortcuts are OS-level and
+  // outlive the app otherwise.
+  globalShortcut.unregisterAll();
 });
 
 // In this file you can include the rest of your app's specific main process
