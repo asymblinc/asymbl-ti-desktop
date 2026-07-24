@@ -70,6 +70,7 @@ const SIGN_IN_ERROR_MESSAGES = {
     package_not_installed: 'Your Salesforce org doesn’t have Recall installed. Contact your admin.',
     license_not_assigned: 'You don’t have a Recall license assigned yet. Contact your admin.',
     license_revoked: 'Your Recall license has been revoked. Contact your admin.',
+    sf_reconnect_required: 'Your Salesforce connection needs to be refreshed. Please sign in again.',
   },
   sf_oauth_failed: 'Salesforce sign-in failed. Please try again.',
   timeout: 'Sign-in timed out. Please try again.',
