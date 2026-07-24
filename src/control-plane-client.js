@@ -7,10 +7,14 @@
 const axios = require('axios');
 const authStore = require('./auth-store');
 
-// Temporary AWS App Runner bridge (docs/DECISIONS.md ADR-026) while GCP Cloud
-// Run's edge routing issue is open with Support (docs/BLOCKERS.md #10). Revert
-// to the *.run.app Cloud Run URL once that's resolved.
-const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-362541775773.us-east1.run.app';
+// Routed through the MuleSoft CloudHub proxy (docs/mulesoft.md in the Recall
+// repo) rather than directly at Cloud Run - dogfooding the integration while
+// API Manager governance (rate limiting, client-ID enforcement) and the
+// asymbl.app custom domain are still being wired up on the MuleSoft side.
+// STT (/api/ti/desktop/stt/stream) is unaffected - the desktop app never
+// calls it directly, real-time transcript comes through the Recall SDK's own
+// desktop_sdk_callback mechanism, not a client-side WebSocket to this URL.
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-proxy-2ew73i.rajrd4-2.usa-e1.cloudhub.io';
 
 /**
  * F9 (Spec B, Upload Paths): mint a Recall upload token via the control
