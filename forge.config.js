@@ -53,6 +53,7 @@ module.exports = {
       name: '@electron-forge/plugin-webpack',
       config: {
         devContentSecurityPolicy: "default-src * 'unsafe-inline' 'unsafe-eval' data: blob: filesystem: mediastream: file:;",
+        loggerPort: 9080, // 9000 is already bound system-wide (Tailscale) on this machine
         mainConfig: './webpack.main.config.js',
         renderer: {
           config: './webpack.renderer.config.js',
