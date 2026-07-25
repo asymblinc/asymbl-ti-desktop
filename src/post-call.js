@@ -413,8 +413,32 @@ async function runSearch(q) {
   const res = await window.electronAPI.searchSalesforce(q);
   box.innerHTML = '';
   if (res.status !== 'success') {
-    box.innerHTML = `<div class="pc-meta" style="padding:8px 12px;"></div>`;
-    box.querySelector('.pc-meta').textContent = res.message || 'Search failed';
+    // Verified live (2026-07-25): this used to dump the raw error CODE
+    // ("sf_reconnect_required") straight into the UI instead of a readable
+    // message with an actual way to fix it - found by driving a real search
+    // against a real (expired) Salesforce session, not just reading the code.
+    if (res.message === 'sf_reconnect_required') {
+      const wrap = document.createElement('div');
+      wrap.className = 'pc-meta';
+      wrap.style.cssText = 'padding:8px 12px;';
+      wrap.textContent = 'Your Salesforce connection needs to be refreshed. ';
+      const reconnect = document.createElement('a');
+      reconnect.href = '#';
+      reconnect.style.cssText = 'color:var(--accent);cursor:pointer;';
+      reconnect.textContent = 'Reconnect Salesforce';
+      reconnect.onclick = async (e) => {
+        e.preventDefault();
+        await window.electronAPI.startLogin();
+      };
+      wrap.appendChild(reconnect);
+      box.appendChild(wrap);
+      return;
+    }
+    const errBox = document.createElement('div');
+    errBox.className = 'pc-meta';
+    errBox.style.cssText = 'padding:8px 12px;';
+    errBox.textContent = 'Search failed. Try again in a moment.';
+    box.appendChild(errBox);
     return;
   }
   // Best match = highest-scored hit (results arrive pre-sorted by score,
