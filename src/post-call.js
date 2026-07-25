@@ -8,6 +8,10 @@ let selectedLinks = [];
 let activeTab = 'summary';
 let uiHooks = {};
 
+// tokens.css chip tones per SF object type - shared by the Smart-attach
+// rail (renderRail) and the flyout search results (runSearch).
+const CHIP_TONE = { Interview: 'blue', Job: 'blue', JobApplicant: 'blue', Contact: 'green', Account: 'purple', Opportunity: 'amber' };
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -90,8 +94,10 @@ export function openPostCallView(meeting) {
     (n, t) => n + String(t.text || '').split(/\s+/).filter(Boolean).length,
     0
   );
+  // post-call.jsx meta line format: "32 min · 2 speakers · 4,212 words".
+  const speakerCount = new Set((meeting.transcript || []).map((t) => t.speaker).filter(Boolean)).size;
   $('pcDuration').textContent = `${dur} · just now`;
-  $('pcSubMeta').textContent = `${dur} · ${(meeting.transcript || []).length} segments · ${words} words`;
+  $('pcSubMeta').textContent = `${dur} · ${speakerCount} speaker${speakerCount === 1 ? '' : 's'} · ${words.toLocaleString()} words`;
 
   const unlinked =
     !meeting.interviewId &&
@@ -103,6 +109,8 @@ export function openPostCallView(meeting) {
   $('pcMain').classList.toggle('dimmed', unlinked && meeting.link_status !== 'kept_internal' && meeting.link_status !== 'decide_later');
   $('pcFlyout').style.display =
     unlinked && meeting.link_status !== 'kept_internal' && meeting.link_status !== 'decide_later' ? 'block' : 'none';
+  // post-call-notes-link.jsx's Unlinked variant also uses the 340px rail.
+  if ($('pcBody')) $('pcBody').classList.toggle('pc-body-wide-rail', unlinked);
 
   renderSummary(meeting);
   renderNotes(meeting);
@@ -172,11 +180,24 @@ export function renderSummary(meeting) {
     const lab = document.createElement('div');
     lab.className = 'pc-section-label';
     lab.textContent = s.label;
-    // Tone hints from design tokens
-    const tone = String(s.label || '').toLowerCase();
-    if (tone.includes('flag') || tone.includes('comp')) lab.classList.add('tone-amber');
-    if (tone.includes('skill') || tone.includes('decision')) lab.classList.add('tone-green');
-    if (tone.includes('motivation') || tone.includes('action')) lab.classList.add('tone-accent');
+    // post-call.jsx's own example data: Skills=neutral, Comp=amber,
+    // Motivation=green, Flags=accent. gemini-summary.ts's prompt only ever
+    // emits one of these fixed labels per template (recruiter: Skills/Comp/
+    // Motivation/Flags/Next steps; general: Topics/Decisions/Action items/
+    // Open questions) - an exact lookup is both correct and simpler than a
+    // keyword heuristic (the previous version tagged Skills as green and
+    // Motivation as accent - backwards from the actual design).
+    const SECTION_TONE = {
+      comp: 'tone-amber',
+      motivation: 'tone-green',
+      flags: 'tone-accent',
+      'next steps': 'tone-accent',
+      decisions: 'tone-green',
+      'action items': 'tone-accent',
+      'open questions': 'tone-amber',
+    };
+    const toneClass = SECTION_TONE[String(s.label || '').toLowerCase()];
+    if (toneClass) lab.classList.add(toneClass);
     card.appendChild(lab);
     const ul = document.createElement('ul');
     (s.items || []).forEach((item) => {
@@ -193,21 +214,44 @@ export function renderSummary(meeting) {
 function renderNotes(meeting) {
   const editor = $('pcNotesEditor');
   if (editor) editor.value = meeting.content || '';
-  const prov = $('pcProvenance');
-  if (!prov) return;
-  prov.innerHTML = '';
+}
+
+// post-call-notes-link.jsx: the Notes tab's right rail shows provenance
+// ("How your notes shaped the summary"), not Smart-attach - the same rail
+// slot renderRail() uses for the Summary tab, swapped per active tab (see
+// setTab). No "stays local" caption in this variant's footer.
+function renderProvenanceRail(meeting) {
+  const body = $('pcRailBody');
+  if (!body) return;
   const items = meeting.aiSummaryProvenance || [];
+  const noteLineCount = String(meeting.content || '').split('\n').filter((l) => l.trim()).length;
+
+  $('pcRailTitle').textContent = 'How your notes shaped the summary';
+  $('pcRailSub').textContent = noteLineCount
+    ? `${items.length} of ${noteLineCount} notes were woven in. Private notes never leave this device.`
+    : 'Summary was built from the transcript alone.';
+
+  body.innerHTML = '';
   if (!items.length) {
-    prov.innerHTML = '<div class="pc-meta">Note → summary provenance appears after Gemini finishes when notes informed the summary.</div>';
+    const empty = document.createElement('div');
+    empty.className = 'pc-meta';
+    empty.textContent = 'Note → summary provenance appears after Gemini finishes when notes informed the summary.';
+    body.appendChild(empty);
     return;
   }
   items.forEach((p) => {
     const card = document.createElement('div');
     card.className = 'pc-provenance-card';
-    card.innerHTML = `<div class="note"></div><div class="into"></div>`;
-    card.querySelector('.note').textContent = `“${p.note}”`;
-    card.querySelector('.into').textContent = `Likely informed: ${p.into}`;
-    prov.appendChild(card);
+    const note = document.createElement('div');
+    note.className = 'note hand';
+    note.textContent = `"${p.note}"`;
+    const into = document.createElement('div');
+    into.className = 'into';
+    into.innerHTML = '<span aria-hidden="true">→</span> <span></span>';
+    into.querySelector('span:last-child').textContent = p.into;
+    card.appendChild(note);
+    card.appendChild(into);
+    body.appendChild(card);
   });
 }
 
@@ -261,22 +305,61 @@ function renderRail(meeting, unlinked) {
   $('pcRailTitle').textContent = 'Smart-attach';
   $('pcRailSub').textContent = 'Files this conversation under the right Salesforce records.';
   const records = meeting.linked_records || [];
-  if (meeting.interviewId || meeting.interview_id) {
+
+  // post-call.jsx candidate card: primary gets a "Best match" badge
+  // (absolute, top:-8/left:12, accent pill) + 1.5px accent border; every
+  // other candidate is a plain 1px-border card. Confidence (s.confidence in
+  // the mockup) only exists for records that came from an actual Smart-
+  // attach search - an already-linked record has no such score to show, so
+  // it's omitted rather than fabricated (same honesty rule as sf-search.ts).
+  const renderCandidateCard = (name, why, type, isPrimary) => {
     const card = document.createElement('div');
-    card.className = 'pc-candidate primary';
-    card.innerHTML = `<div class="name">Interview linked</div><div class="why"></div>`;
-    card.querySelector('.why').textContent = meeting.interviewId || meeting.interview_id;
-    body.appendChild(card);
+    card.className = 'pc-candidate' + (isPrimary ? ' primary' : '');
+    if (isPrimary) {
+      const badge = document.createElement('div');
+      badge.className = 'pc-candidate-badge';
+      badge.textContent = 'Best match';
+      card.appendChild(badge);
+    }
+    const top = document.createElement('div');
+    top.className = 'pc-candidate-top';
+    const chip = document.createElement('span');
+    chip.className = `pc-chip pc-chip-${CHIP_TONE[type] || 'blue'}`;
+    chip.textContent = type;
+    top.appendChild(chip);
+    card.appendChild(top);
+    const nameEl = document.createElement('div');
+    nameEl.className = 'name';
+    nameEl.textContent = name;
+    card.appendChild(nameEl);
+    const whyEl = document.createElement('div');
+    whyEl.className = 'why';
+    whyEl.textContent = why;
+    card.appendChild(whyEl);
+    return card;
+  };
+
+  let isFirst = true;
+  if (meeting.interviewId || meeting.interview_id) {
+    body.appendChild(renderCandidateCard('Interview linked', meeting.interviewId || meeting.interview_id, 'Interview', isFirst));
+    isFirst = false;
   }
   records.forEach((r) => {
     if (r.type === 'Interview' && (r.id === meeting.interviewId || r.id === meeting.interview_id)) return;
-    const card = document.createElement('div');
-    card.className = 'pc-candidate primary';
-    card.innerHTML = `<div class="name"></div><div class="why"></div>`;
-    card.querySelector('.name').textContent = r.name || r.id;
-    card.querySelector('.why').textContent = `${r.type} · ${r.id}`;
-    body.appendChild(card);
+    body.appendChild(renderCandidateCard(r.name || r.id, `${r.type} · ${r.id}`, r.type, isFirst));
+    isFirst = false;
   });
+
+  const findAnother = document.createElement('button');
+  findAnother.type = 'button';
+  findAnother.className = 'pc-find-another';
+  findAnother.textContent = 'Find another record…';
+  findAnother.onclick = () => {
+    $('pcFlyout').style.display = 'block';
+    $('pcFlyoutSearch')?.focus();
+  };
+  body.appendChild(findAnother);
+
   if (meeting.sfUpload?.uploaded?.length) {
     const ok = document.createElement('div');
     ok.className = 'pc-meta';
@@ -292,15 +375,30 @@ function setTab(tab) {
     const btn = document.getElementById(`pcTab${t[0].toUpperCase()}${t.slice(1)}`);
     if (btn) btn.setAttribute('aria-selected', t === tab ? 'true' : 'false');
   });
+  // post-call-notes-link.jsx: Notes tab's rail is 340px, not the Summary
+  // tab's 320px.
+  if ($('pcBody')) $('pcBody').classList.toggle('pc-body-wide-rail', tab === 'notes');
   if ($('pcTldrCard')) $('pcTldrCard').style.display = tab === 'summary' ? '' : 'none';
   if ($('pcSections')) $('pcSections').style.display = tab === 'summary' ? '' : 'none';
   if ($('pcNotesPane')) $('pcNotesPane').style.display = tab === 'notes' ? '' : 'none';
   if ($('pcTranscriptPane')) $('pcTranscriptPane').style.display = tab === 'transcript' ? '' : 'none';
-  if (tab === 'notes' && currentMeeting) {
-    renderNotes(currentMeeting);
-  }
-  if (tab === 'transcript' && currentMeeting) {
-    renderTranscript(currentMeeting);
+  // post-call-notes-link.jsx: the rail swaps content per tab (Smart-attach
+  // for Summary, provenance for Notes) - not just the main pane.
+  if ($('pcRailFooterCaption')) $('pcRailFooterCaption').style.display = tab === 'notes' ? 'none' : '';
+  if (currentMeeting) {
+    if (tab === 'notes') {
+      renderNotes(currentMeeting);
+      renderProvenanceRail(currentMeeting);
+    } else if (tab === 'transcript') {
+      renderTranscript(currentMeeting);
+    } else {
+      const unlinked =
+        !currentMeeting.interviewId &&
+        !currentMeeting.interview_id &&
+        currentMeeting.link_status !== 'linked' &&
+        !(currentMeeting.linked_records && currentMeeting.linked_records.length);
+      renderRail(currentMeeting, unlinked);
+    }
   }
 }
 
@@ -349,7 +447,9 @@ async function runSearch(q) {
   (res.results || []).forEach((r, i) => {
     const isBest = i === 0;
     const row = document.createElement('div');
-    row.className = 'pc-flyout-row';
+    // post-call-notes-link.jsx: the top row gets an accent-3 background,
+    // not a text suffix - "selected" already carries that treatment.
+    row.className = 'pc-flyout-row' + (isBest ? ' selected' : '');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = isBest || r.score >= ATTACH_THRESHOLD;
@@ -357,14 +457,14 @@ async function runSearch(q) {
     cb.setAttribute('aria-label', `Attach ${r.name}`);
     row.appendChild(cb);
     const chip = document.createElement('span');
-    chip.className = 'pc-chip pc-chip-green';
+    chip.className = `pc-chip pc-chip-${CHIP_TONE[r.type] || 'blue'}`;
     chip.textContent = r.type;
     row.appendChild(chip);
     const info = document.createElement('div');
     info.style.cssText = 'flex:1;min-width:0';
     const name = document.createElement('div');
     name.style.cssText = 'font-size:12.5px;font-weight:600;';
-    name.textContent = isBest ? `${r.name} · Best match` : r.name;
+    name.textContent = r.name;
     const why = document.createElement('div');
     why.style.cssText = 'font-size:10.5px;color:var(--ink-4);';
     why.textContent = `${r.sub} · ~${r.score}% estimated match`;
@@ -473,6 +573,13 @@ export function wirePostCallUi(hooks = {}) {
     if (e.key === 'Escape') {
       $('pcFlyout').style.display = 'none';
     }
+  });
+
+  // Create-record mini-form is explicitly out-of-scope this pass (PLAN v2
+  // §12, TODOS.md item 27's P4-2) - honest "not built yet" rather than a
+  // silent no-op or a fake success.
+  $('pcCreateRecord')?.addEventListener('click', () => {
+    alert('Creating a new Salesforce record from here is coming soon. Use Keep internal or Decide later for now.');
   });
 
   $('pcKeepInternal')?.addEventListener('click', () => {

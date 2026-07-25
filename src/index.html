@@ -286,7 +286,7 @@
           <button type="button" class="pc-btn-ghost pc-btn-destructive" id="pcDiscard">Discard</button>
           <button type="button" class="pc-btn-ghost" id="pcClose">Close</button>
         </div>
-        <div class="pc-body">
+        <div class="pc-body" id="pcBody">
           <div class="pc-main" id="pcMain">
             <div class="pc-title" id="pcTitle">Meeting</div>
             <div class="pc-meta" id="pcSubMeta" style="margin-top:4px;"></div>
@@ -296,10 +296,8 @@
             </div>
             <div class="pc-sections" id="pcSections"></div>
             <div id="pcNotesPane" style="display:none;">
-              <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · notes stay yours · private notes never leave this device for AI</div>
+              <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · notes stay yours, only shared blocks upload</div>
               <textarea id="pcNotesEditor" class="pc-notes-hand" style="width:100%;min-height:220px;border:1px solid var(--paper-edge);border-radius:10px;padding:12px;resize:vertical;"></textarea>
-              <div class="pc-rail-title" style="margin-top:18px;margin-bottom:8px;">Provenance</div>
-              <div id="pcProvenance"></div>
             </div>
             <div id="pcTranscriptPane" style="display:none;"></div>
           </div>
@@ -311,7 +309,7 @@
             <div class="pc-rail-body" id="pcRailBody"></div>
             <div class="pc-rail-footer">
               <button type="button" class="pc-btn-primary" id="pcConfirmUpload">Confirm &amp; upload to Salesforce</button>
-              <div class="pc-meta" style="text-align:center;margin-top:6px;">Stays local until you confirm</div>
+              <div class="pc-meta" id="pcRailFooterCaption" style="text-align:center;margin-top:6px;">Stays local until you confirm</div>
             </div>
           </div>
         </div>
@@ -325,6 +323,7 @@
           </div>
           <div id="pcFlyoutResults" style="padding:0 4px 10px;max-height:240px;overflow-y:auto;"></div>
           <div style="border-top:1px solid var(--paper-2);padding:8px 12px;">
+            <div class="pc-escape" id="pcCreateRecord" title="Create-record mini-form is a separate, not-yet-built slice">Create a new record from this call…</div>
             <div class="pc-escape" id="pcKeepInternal">Keep internal — never syncs to Salesforce</div>
             <div class="pc-escape" id="pcDecideLater">Decide later (stays in your attention queue)</div>
           </div>
