@@ -9,6 +9,14 @@
 import './index.css';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import {
+  openPostCallView,
+  closePostCallView,
+  wirePostCallUi,
+  shouldOpenPostCall,
+  isPostCallOpen,
+  renderSummary,
+} from './post-call.js';
 
 marked.setOptions({ mangle: false, headerIds: false });
 
@@ -573,6 +581,7 @@ function createMeetingCard(meeting) {
 
 // Function to show home view
 function showHomeView() {
+  closePostCallView();
   document.getElementById('homeView').style.display = 'block';
   document.getElementById('editorView').style.display = 'none';
   document.getElementById('backButton').style.display = 'none';
@@ -601,9 +610,33 @@ function showHomeView() {
 }
 
 // Function to show editor view
-function showEditorView(meetingId) {
+function showEditorView(meetingId, { forceClassicEditor = false } = {}) {
   console.log(`Showing editor view for meeting ID: ${meetingId}`);
 
+  // Find the meeting in either upcoming or past meetings
+  let meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
+
+  if (!meeting) {
+    console.error(`Meeting not found: ${meetingId}`);
+    return;
+  }
+
+  // Screen 08 — finished captures open post-call (summary + link flyout)
+  if (!forceClassicEditor && shouldOpenPostCall(meeting)) {
+    closePostCallView();
+    document.getElementById('homeView').style.display = 'none';
+    document.getElementById('editorView').style.display = 'none';
+    document.getElementById('backButton').style.display = 'block';
+    document.getElementById('newNoteBtn').style.display = 'none';
+    document.getElementById('toggleSidebar').style.display = 'none';
+    const joinMeetingBtn = document.getElementById('joinMeetingBtn');
+    if (joinMeetingBtn) joinMeetingBtn.style.display = 'none';
+    currentEditingMeetingId = meetingId;
+    openPostCallView(meeting);
+    return;
+  }
+
+  closePostCallView();
   // Make the views visible/hidden
   document.getElementById('homeView').style.display = 'none';
   document.getElementById('editorView').style.display = 'block';
@@ -615,14 +648,6 @@ function showEditorView(meetingId) {
   const joinMeetingBtn = document.getElementById('joinMeetingBtn');
   if (joinMeetingBtn) {
     joinMeetingBtn.style.display = 'none';
-  }
-
-  // Find the meeting in either upcoming or past meetings
-  let meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-
-  if (!meeting) {
-    console.error(`Meeting not found: ${meetingId}`);
-    return;
   }
 
   // Set the current editing meeting ID
@@ -1954,6 +1979,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Screen 08 post-call shell
+  wirePostCallUi({
+    onClose: () => showHomeView(),
+    onSaveNotes: (meetingId, content) => {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) {
+        m.content = content;
+        saveMeetingsData();
+      }
+    },
+    onPersistLinkStatus: (meetingId, status) => {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) {
+        m.link_status = status;
+        saveMeetingsData();
+      }
+    },
+    onReloadMeeting: async (meetingId) => {
+      await loadMeetingsDataFromFile();
+      return [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId) || null;
+    },
+    onDiscarded: async () => {
+      await loadMeetingsDataFromFile();
+      showHomeView();
+    },
+    // Screen 08 backoff poll (Grok P1/P4) - persists the summary fields the
+    // read-only status poll picked up, same fields generateMeetingSummary's
+    // IPC handlers already write on the manual Re-summarize path.
+    onSummaryUpdated: (meetingId, updated) => {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) {
+        m.aiSummary = updated.aiSummary;
+        m.aiSummaryTldr = updated.aiSummaryTldr;
+        m.aiSummarySections = updated.aiSummarySections;
+        m.aiSummaryProvenance = updated.aiSummaryProvenance;
+        m.aiSummaryStatus = updated.aiSummaryStatus;
+        m.hasSummary = updated.hasSummary;
+        m.aiSummaryError = updated.aiSummaryError;
+        saveMeetingsData();
+      }
+    },
+  });
+
   // Initialize the SDK Logger
   sdkLogger.init();
 
@@ -2082,20 +2150,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Listen for recording completed events
+  // Listen for recording completed events → Screen 08 post-call
   window.electronAPI.onRecordingCompleted((meetingId) => {
     console.log('Recording completed for meeting:', meetingId);
-    // If this note is currently being edited, reload its content
-    if (currentEditingMeetingId === meetingId) {
-      loadMeetingsDataFromFile().then(() => {
-        // Refresh the editor with the updated content
-        const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-        if (meeting) {
-          document.getElementById('simple-editor').value = meeting.content;
+    loadMeetingsDataFromFile().then(() => {
+      const meeting = [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId);
+      if (!meeting) return;
+      currentEditingMeetingId = meetingId;
+      if (shouldOpenPostCall(meeting)) {
+        document.getElementById('homeView').style.display = 'none';
+        document.getElementById('editorView').style.display = 'none';
+        document.getElementById('backButton').style.display = 'block';
+        openPostCallView(meeting);
+        return;
+      }
+      if (currentEditingMeetingId === meetingId) {
+        const ed = document.getElementById('simple-editor');
+        if (ed) {
+          ed.value = meeting.content;
           syncEditorPreview(meeting.content);
         }
-      });
-    }
+      }
+    });
   });
 
   // Listen for video frame events
@@ -2255,47 +2331,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Listen for summary generation events
+  // Listen for summary generation events (Gemini fields live on meeting, not content)
   window.electronAPI.onSummaryGenerated((meetingId) => {
     console.log('Summary generated for meeting:', meetingId);
-
-    // If this note is currently being edited, refresh the content
-    if (currentEditingMeetingId === meetingId) {
-      loadMeetingsDataFromFile().then(() => {
-        const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-        if (meeting) {
-          // Update the editor with the new content containing the summary
-          document.getElementById('simple-editor').value = meeting.content;
-          syncEditorPreview(meeting.content);
-        }
-      });
-    }
+    if (currentEditingMeetingId !== meetingId) return;
+    loadMeetingsDataFromFile().then(() => {
+      const meeting = [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId);
+      if (!meeting) return;
+      if (isPostCallOpen()) {
+        openPostCallView(meeting);
+        return;
+      }
+      // Classic editor: leave My Notes alone; summary is in aiSummary*
+    });
   });
 
-  // Listen for streaming summary updates
+  // Listen for streaming summary updates (Gemini — never clobbers My Notes)
   window.electronAPI.onSummaryUpdate((data) => {
-    const { meetingId, content, timestamp } = data;
+    const { meetingId, content, aiSummaryStatus } = data;
+    if (currentEditingMeetingId !== meetingId) return;
 
-    // If this note is currently being edited, update the content immediately
-    if (currentEditingMeetingId === meetingId) {
-      // Get the editor element
-      const editorElement = document.getElementById('simple-editor');
-
-      // Update the editor with the latest streamed content
-      // Use requestAnimationFrame for smoother updates that don't block the main thread
-      requestAnimationFrame(() => {
-        editorElement.value = content;
-        syncEditorPreview(content);
-
-        // Force the editor to scroll to the bottom to follow the new text
-        // This creates a better experience of watching text appear
-        editorElement.scrollTop = editorElement.scrollHeight;
-        const preview = document.getElementById('simple-editor-preview');
-        if (preview) {
-          preview.scrollTop = preview.scrollHeight;
+    // Prefer post-call TL;DR surface when Screen 08 is open
+    if (isPostCallOpen()) {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) {
+        m.aiSummaryStatus = aiSummaryStatus || m.aiSummaryStatus || 'writing';
+        if (content && (aiSummaryStatus === 'writing' || !aiSummaryStatus)) {
+          // progress text only
         }
-      });
+        renderSummary(m);
+      }
+      const body = document.getElementById('pcTldrBody');
+      const label = document.getElementById('pcTldrLabel');
+      if (body && content) body.textContent = content;
+      if (label) label.textContent = '✦ Writing notes…';
+      return;
     }
+
+    // Classic editor: do not overwrite notes content with AI status strings
   });
 
   // Add event listeners for buttons

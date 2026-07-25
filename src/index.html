@@ -269,6 +269,71 @@
         </div>
       </div>
 
+      <!-- Screen 08 family — Post-call review (Summary / Notes / unlinked flyout) -->
+      <div id="postCallView" aria-label="Post-call review">
+        <div class="pc-topbar">
+          <span class="pc-chip pc-chip-green" id="pcChipCaptured">Captured</span>
+          <span class="pc-meta" id="pcDuration">—</span>
+          <span class="pc-chip pc-chip-amber" id="pcChipUnlinked" style="display:none;">Not linked</span>
+          <div style="flex:1"></div>
+          <div class="pc-tabs" role="tablist" aria-label="Post-call tabs">
+            <button type="button" class="pc-tab" role="tab" id="pcTabSummary" aria-selected="true" data-tab="summary">Summary</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabNotes" aria-selected="false" data-tab="notes">Notes</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabTranscript" aria-selected="false" data-tab="transcript" title="Transcript tab design pending">Transcript</button>
+          </div>
+          <div style="flex:1"></div>
+          <button type="button" class="pc-btn-ghost" id="pcResummarize">Re-summarize</button>
+          <button type="button" class="pc-btn-ghost pc-btn-destructive" id="pcDiscard">Discard</button>
+          <button type="button" class="pc-btn-ghost" id="pcClose">Close</button>
+        </div>
+        <div class="pc-body">
+          <div class="pc-main" id="pcMain">
+            <div class="pc-title" id="pcTitle">Meeting</div>
+            <div class="pc-meta" id="pcSubMeta" style="margin-top:4px;"></div>
+            <div class="pc-tldr" id="pcTldrCard">
+              <div class="pc-tldr-label" id="pcTldrLabel">✦ Writing notes…</div>
+              <div class="pc-tldr-body" id="pcTldrBody">Summary will appear here (Gemini).</div>
+            </div>
+            <div class="pc-sections" id="pcSections"></div>
+            <div id="pcNotesPane" style="display:none;">
+              <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · notes stay yours · private notes never leave this device for AI</div>
+              <textarea id="pcNotesEditor" class="pc-notes-hand" style="width:100%;min-height:220px;border:1px solid var(--paper-edge);border-radius:10px;padding:12px;resize:vertical;"></textarea>
+              <div class="pc-rail-title" style="margin-top:18px;margin-bottom:8px;">Provenance</div>
+              <div id="pcProvenance"></div>
+            </div>
+            <div id="pcTranscriptPane" style="display:none;"></div>
+          </div>
+          <div class="pc-rail" id="pcRail">
+            <div class="pc-rail-header">
+              <div class="pc-rail-title" id="pcRailTitle">Smart-attach</div>
+              <div class="pc-rail-sub" id="pcRailSub">Files this conversation under the right Salesforce records.</div>
+            </div>
+            <div class="pc-rail-body" id="pcRailBody"></div>
+            <div class="pc-rail-footer">
+              <button type="button" class="pc-btn-primary" id="pcConfirmUpload">Confirm &amp; upload to Salesforce</button>
+              <div class="pc-meta" style="text-align:center;margin-top:6px;">Stays local until you confirm</div>
+            </div>
+          </div>
+        </div>
+        <div class="pc-flyout" id="pcFlyout" style="display:none;" role="dialog" aria-label="Link this call">
+          <div style="padding:14px 16px 10px;">
+            <div style="font-size:13.5px;font-weight:650;color:var(--ink);">Where does this call belong?</div>
+            <div style="font-size:11.5px;color:var(--ink-4);line-height:1.45;">Link it to Salesforce, keep it internal, or decide later.</div>
+          </div>
+          <div class="pc-flyout-search">
+            <input type="search" id="pcFlyoutSearch" placeholder="Search Salesforce…" autocomplete="off" />
+          </div>
+          <div id="pcFlyoutResults" style="padding:0 4px 10px;max-height:240px;overflow-y:auto;"></div>
+          <div style="border-top:1px solid var(--paper-2);padding:8px 12px;">
+            <div class="pc-escape" id="pcKeepInternal">Keep internal — never syncs to Salesforce</div>
+            <div class="pc-escape" id="pcDecideLater">Decide later (stays in your attention queue)</div>
+          </div>
+          <div style="border-top:1px solid var(--paper-2);padding:8px 12px;text-align:right;">
+            <button type="button" class="pc-btn-ghost" id="pcFlyoutDone">Done</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Note Editor View -->
       <div id="editorView" style="display: none;">
         <div class="note-container">

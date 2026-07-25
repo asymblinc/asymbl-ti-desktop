@@ -335,6 +335,7 @@ app.whenReady().then(() => {
 
   // Create meetings file if it doesn't exist
   try {
+    const meetingsFilePath = getMeetingsFilePath();
     if (!fs.existsSync(meetingsFilePath)) {
       const initialData = { upcomingMeetings: [], pastMeetings: [] };
       fs.writeFileSync(meetingsFilePath, JSON.stringify(initialData, null, 2));
@@ -505,8 +506,65 @@ app.on('will-quit', () => {
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and import them here.
 
-// Path to meetings data file in the user's Application Support directory
-const meetingsFilePath = path.join(app.getPath('userData'), 'meetings.json');
+// TODOS.md #8 / P0-8: meetings.json was one shared file regardless of which
+// Salesforce identity is signed in - a second person signing into the same
+// machine could read the first person's local notes. Scoped per signed-in
+// user below (sf_uid claim - stable across token refresh, unlike email
+// which the JWT contract doesn't always carry a display name for anyway).
+// Display-only decode, same non-trust-boundary reasoning as getAuthStatus's
+// identical pattern above - every real API call is still verified
+// server-side regardless of what this reads.
+function currentUserScopeId() {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf-8'));
+    const uid = payload.sf_uid || payload.sub;
+    if (!uid) return null;
+    // Filesystem-safe: sf_uid is an 18-char SF Id (alphanumeric), but don't
+    // trust that blindly for a path segment.
+    return String(uid).replace(/[^a-zA-Z0-9_-]/g, '_');
+  } catch {
+    return null;
+  }
+}
+
+const LEGACY_MEETINGS_FILE_PATH = path.join(app.getPath('userData'), 'meetings.json');
+
+function meetingsFilePathForScope(scopeId) {
+  return scopeId
+    ? path.join(app.getPath('userData'), `meetings-${scopeId}.json`)
+    : LEGACY_MEETINGS_FILE_PATH;
+}
+
+// One-time migration: the first signed-in user after this change ships
+// inherits the pre-existing shared file (better than silently losing it),
+// then the legacy file is renamed so no OTHER user who signs in later can
+// read it. Runs at most once per machine (guarded by the legacy file's
+// existence - it's gone after the first migration).
+function migrateLegacyMeetingsFileIfNeeded(scopedPath) {
+  if (scopedPath === LEGACY_MEETINGS_FILE_PATH) return;
+  if (fs.existsSync(scopedPath)) return;
+  if (!fs.existsSync(LEGACY_MEETINGS_FILE_PATH)) return;
+  try {
+    fs.copyFileSync(LEGACY_MEETINGS_FILE_PATH, scopedPath);
+    fs.renameSync(LEGACY_MEETINGS_FILE_PATH, `${LEGACY_MEETINGS_FILE_PATH}.migrated-${Date.now()}`);
+    console.log(`Migrated legacy shared meetings.json to per-user file: ${scopedPath}`);
+  } catch (error) {
+    console.error('Failed to migrate legacy meetings.json:', error.message);
+  }
+}
+
+// Path to meetings data file in the user's Application Support directory -
+// resolved fresh on every access (not a module-load-time const) since the
+// signed-in user can change (sign out / sign in as someone else) within a
+// single app run.
+function getMeetingsFilePath() {
+  const scopeId = currentUserScopeId();
+  const scopedPath = meetingsFilePathForScope(scopeId);
+  migrateLegacyMeetingsFileIfNeeded(scopedPath);
+  return scopedPath;
+}
 
 // Global state to track active recordings
 const activeRecordings = {
@@ -570,9 +628,27 @@ const fileOperationManager = {
   pendingOperations: [],
   cachedData: null,
   lastReadTime: 0,
+  cachedFilePath: null,
+
+  // P0-8: the cache is keyed to whichever user's file it was last read
+  // from. If the signed-in user changed since the last read (sign out /
+  // sign in as someone else, no app restart), the cache would otherwise
+  // serve the PREVIOUS user's data to the new one for up to 500ms, or
+  // write the wrong file for the current operation - drop it whenever the
+  // resolved path changes.
+  invalidateIfUserChanged: function (path) {
+    if (this.cachedFilePath !== null && this.cachedFilePath !== path) {
+      this.cachedData = null;
+      this.lastReadTime = 0;
+    }
+    this.cachedFilePath = path;
+  },
 
   // Read the meetings data with caching to reduce file I/O
   readMeetingsData: async function () {
+    const meetingsFilePath = getMeetingsFilePath();
+    this.invalidateIfUserChanged(meetingsFilePath);
+
     // If we have cached data that's recent (less than 500ms old), use it
     const now = Date.now();
     if (this.cachedData && (now - this.lastReadTime < 500)) {
@@ -638,8 +714,9 @@ const fileOperationManager = {
           this.cachedData = updatedData;
           this.lastReadTime = Date.now();
 
-          // Write to file
-          await fs.promises.writeFile(meetingsFilePath, JSON.stringify(updatedData, null, 2));
+          // Write to file - re-resolve rather than trust this.cachedFilePath
+          // in case the operationFn itself triggered a sign-out/sign-in.
+          await fs.promises.writeFile(getMeetingsFilePath(), JSON.stringify(updatedData, null, 2));
         }
 
         // Resolve the operation's promise
@@ -735,8 +812,9 @@ async function finalizeDesktopRecordingSession(windowId) {
   // all extraction's merge/offset logic needs a coarse ordering for, not
   // millisecond-accurate sync with the bot's transcript.
   let utterances = [];
+  let notes = [];
   try {
-    const fileData = await fs.promises.readFile(meetingsFilePath, 'utf8');
+    const fileData = await fs.promises.readFile(getMeetingsFilePath(), 'utf8');
     const meetingsData = JSON.parse(fileData);
     const meeting = meetingsData.pastMeetings.find((m) => m.id === tracked.noteId);
     const startedAt = tracked.recordingStartedAt || Date.now();
@@ -746,6 +824,13 @@ async function finalizeDesktopRecordingSession(windowId) {
       end_ms: Math.max(0, new Date(t.timestamp).getTime() - startedAt),
       text: t.text
     }));
+    // Screen 08 — pass user notes into Gemini summary (non-private bullets only)
+    notes = String(meeting?.content || '')
+      .split('\n')
+      .map((line) => line.replace(/^[\s•*\-#]+/, '').trim())
+      .filter((line) => line.length > 2 && !/^Meeting (Title|Date|Participants|Description)/i.test(line))
+      .slice(0, 40)
+      .map((text) => ({ text, private: false }));
   } catch (error) {
     console.error('Error reading transcript for session finalize:', error.message);
   }
@@ -768,12 +853,23 @@ async function finalizeDesktopRecordingSession(windowId) {
   const result = await controlPlaneClient.finalizeDesktopSession(tracked.sessionId, {
     endedAt: new Date().toISOString(),
     finalSeconds: durationS,
-    transcriptArtifacts: utterances.length ? [{ type: 'utterances', url_or_payload: utterances }] : []
+    transcriptArtifacts: utterances.length ? [{ type: 'utterances', url_or_payload: utterances }] : [],
+    notes,
   });
   if (result.status !== 'success') {
     console.error('Failed to finalize desktop session:', result.message);
   } else {
     console.log('Finalized desktop session:', tracked.sessionId, result.result);
+    // Screen 08 — mark summary pending + ensure ids for poll
+    if (tracked.noteId) {
+      await updateMeetingById(tracked.noteId, (m) => {
+        if (result.result?.notes_session_id) m.notesSessionId = result.result.notes_session_id;
+        m.controlPlaneSessionId = tracked.sessionId;
+        m.aiSummaryStatus = result.result?.summary_status || 'pending';
+        m.hasSummary = false;
+        m.link_status = m.link_status || (m.interviewId ? 'linked' : 'unlinked');
+      });
+    }
   }
 
   // F10-R9: PII-free usage event - exactly the allowed field set, nothing else.
@@ -1298,6 +1394,111 @@ ipcMain.handle('deleteMeeting', async (event, meetingId) => {
   }
 });
 
+ipcMain.handle('searchSalesforce', async (_event, query) => {
+  return controlPlaneClient.searchSalesforce(query || '');
+});
+
+ipcMain.handle('getMeetingSummaryStatus', async (_event, notesSessionId) => {
+  return controlPlaneClient.fetchMeetingSummary(notesSessionId);
+});
+
+ipcMain.handle('linkMeetingRecords', async (_event, meetingId, linkedRecords) => {
+  try {
+    const data = await fileOperationManager.readMeetingsData();
+    const meeting = data.pastMeetings.find((m) => m.id === meetingId);
+    if (!meeting?.notesSessionId) {
+      return { success: false, error: 'No notes session for this meeting' };
+    }
+    const res = await controlPlaneClient.linkMeetingRecords(meeting.notesSessionId, {
+      sessionId: meeting.controlPlaneSessionId,
+      linkedRecords: linkedRecords || [],
+    });
+    if (res.status !== 'success') return { success: false, error: res.message };
+    await updateMeetingById(meetingId, (m) => {
+      m.linked_records = linkedRecords || [];
+      m.link_status = res.result?.link_status || 'linked';
+      if (res.result?.interview_id) m.interviewId = res.result.interview_id;
+    });
+    return { success: true, result: res.result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('confirmUploadMeeting', async (_event, meetingId) => {
+  try {
+    const data = await fileOperationManager.readMeetingsData();
+    const meeting = data.pastMeetings.find((m) => m.id === meetingId);
+    if (!meeting?.notesSessionId) {
+      return { success: false, error: 'No notes session for this meeting' };
+    }
+    const linked = meeting.linked_records || [];
+    if (!linked.length && !(meeting.interviewId || meeting.interview_id)) {
+      return { success: false, error: 'Select a Salesforce record first' };
+    }
+    const records =
+      linked.length > 0
+        ? linked
+        : [{ type: 'Interview', id: meeting.interviewId || meeting.interview_id, name: meeting.title }];
+    const res = await controlPlaneClient.confirmUploadMeeting(meeting.notesSessionId, {
+      sessionId: meeting.controlPlaneSessionId,
+      meetingTitle: meeting.title,
+      linkedRecords: records,
+    });
+    if (res.status !== 'success') return { success: false, error: res.message };
+    await updateMeetingById(meetingId, (m) => {
+      m.link_status = 'linked';
+      m.linked_records = records;
+      m.sfUpload = res.result;
+      if (res.result?.interview_id) m.interviewId = res.result.interview_id;
+    });
+    return { success: true, result: res.result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Screen 08 "Discard": deletes server-side summary/transcript (never
+// Salesforce - this action must only be reachable before confirm-upload)
+// then deletes the local meeting entry the same way deleteMeeting does.
+ipcMain.handle('discardMeeting', async (_event, meetingId) => {
+  try {
+    const data = await fileOperationManager.readMeetingsData();
+    const meeting =
+      data.pastMeetings.find((m) => m.id === meetingId) ||
+      data.upcomingMeetings.find((m) => m.id === meetingId);
+    if (!meeting) {
+      return { success: false, error: 'Meeting not found' };
+    }
+    if (meeting.link_status === 'linked' && meeting.sfUpload) {
+      return { success: false, error: 'Already uploaded to Salesforce — cannot discard' };
+    }
+    if (meeting.notesSessionId) {
+      const res = await controlPlaneClient.discardMeetingSummary(meeting.notesSessionId);
+      if (res.status !== 'success') {
+        return { success: false, error: res.message || 'Could not discard server-side summary' };
+      }
+    }
+    let recordingId = null;
+    await fileOperationManager.scheduleOperation(async (currentData) => {
+      const pastIdx = currentData.pastMeetings.findIndex((m) => m.id === meetingId);
+      const upcomingIdx = currentData.upcomingMeetings.findIndex((m) => m.id === meetingId);
+      if (pastIdx !== -1) {
+        recordingId = currentData.pastMeetings[pastIdx].recordingId;
+        currentData.pastMeetings.splice(pastIdx, 1);
+      }
+      if (upcomingIdx !== -1) {
+        recordingId = recordingId || currentData.upcomingMeetings[upcomingIdx].recordingId;
+        currentData.upcomingMeetings.splice(upcomingIdx, 1);
+      }
+      return currentData;
+    });
+    return { success: true, recordingId };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // Handle generating AI summary for a meeting (non-streaming)
 ipcMain.handle('generateMeetingSummary', async (event, meetingId) => {
   try {
@@ -1326,26 +1527,33 @@ ipcMain.handle('generateMeetingSummary', async (event, meetingId) => {
     // Log summary generation to console instead of showing a notification
     console.log('Generating AI summary for meeting: ' + meetingId);
 
-    // Generate the summary
-    const summary = await generateMeetingSummary(meeting);
+    const result = await generateMeetingSummary(meeting);
+    if (result.error && !result.aiSummary) {
+      await updateMeetingById(meetingId, (m) => {
+        m.aiSummaryStatus = result.aiSummaryStatus || 'error';
+        m.hasSummary = false;
+      });
+      return { success: false, error: result.error };
+    }
 
-    // Save the updated data with summary
     await updateMeetingById(meetingId, (m) => {
-      m.content = summary;
+      // My Notes (content) never overwritten by AI
+      m.aiSummary = result.aiSummary;
+      m.aiSummaryTldr = result.aiSummaryTldr || null;
+      m.aiSummarySections = result.aiSummarySections || null;
+      m.aiSummaryProvenance = result.aiSummaryProvenance || null;
+      m.aiSummaryStatus = 'ready';
       m.hasSummary = true;
+      m.summaryProvider = 'gemini';
     });
 
-    console.log('Updated meeting note with AI summary');
+    console.log('Updated meeting with Gemini AI summary');
 
-    // Notify the renderer to refresh the note if it's open
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('summary-generated', meetingId);
     }
 
-    return {
-      success: true,
-      summary
-    };
+    return { success: true, summary: result.aiSummary, tldr: result.aiSummaryTldr };
   } catch (error) {
     console.error('Error generating meeting summary:', error);
     return { success: false, error: error.message };
@@ -1493,28 +1701,24 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
     // Get meeting title for use in the new content
     const meetingTitle = meeting.title || "Meeting Notes";
 
-    // Initial content with placeholders
-    meeting.content = 'Generating summary...';
-
-    // Update the note on the frontend right away
+    await updateMeetingById(meetingId, (m) => {
+      m.aiSummaryStatus = 'pending';
+      m.hasSummary = false;
+    });
     mainWindow.webContents.send('summary-update', {
       meetingId,
-      content: meeting.content
+      content: 'Writing notes…',
+      aiSummaryStatus: 'writing',
     });
 
-    // Create progress callback for streaming updates
     const streamProgress = (currentText) => {
-      // Update content with current streaming text
-      meeting.content = `## AI-Generated Meeting Summary\n${currentText}`;
-
-      // Send immediate update to renderer - don't debounce or delay this
       if (mainWindow && !mainWindow.isDestroyed()) {
         try {
-          // Force immediate send of the update
           mainWindow.webContents.send('summary-update', {
             meetingId,
-            content: meeting.content,
-            timestamp: Date.now() // Add timestamp to ensure uniqueness
+            content: currentText,
+            aiSummaryStatus: 'writing',
+            timestamp: Date.now(),
           });
         } catch (err) {
           console.error('Error sending streaming update to renderer:', err);
@@ -1522,24 +1726,29 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
       }
     };
 
-    // Generate summary with streaming
-    const summary = await generateMeetingSummary(meeting, streamProgress);
+    const result = await generateMeetingSummary(meeting, streamProgress);
+    if (result.error && !result.aiSummary) {
+      await updateMeetingById(meetingId, (m) => {
+        m.aiSummaryStatus = result.aiSummaryStatus || 'error';
+        m.hasSummary = false;
+      });
+      return { success: false, error: result.error };
+    }
 
-    // Save the updated data with summary
     await updateMeetingById(meetingId, (m) => {
-      m.content = summary;
+      m.aiSummary = result.aiSummary;
+      m.aiSummaryTldr = result.aiSummaryTldr || null;
+      m.aiSummarySections = result.aiSummarySections || null;
+      m.aiSummaryProvenance = result.aiSummaryProvenance || null;
+      m.aiSummaryStatus = 'ready';
       m.hasSummary = true;
+      m.summaryProvider = 'gemini';
     });
 
-    console.log('Updated meeting note with AI summary (streaming)');
-
-    // Final notification to renderer
+    console.log('Updated meeting with Gemini AI summary');
     mainWindow.webContents.send('summary-generated', meetingId);
 
-    return {
-      success: true,
-      summary
-    };
+    return { success: true, summary: result.aiSummary, tldr: result.aiSummaryTldr };
   } catch (error) {
     console.error('Error generating streaming summary:', error);
     return { success: false, error: error.message };
@@ -1648,7 +1857,7 @@ async function createMeetingNoteAndRecord(platformName) {
     // Add to pastMeetings - routed through scheduleOperation (fresh read,
     // not this function's own independent read) so a concurrent write to a
     // different meeting isn't overwritten by an earlier snapshot.
-    console.log(`Saving meeting data to ${meetingsFilePath} with ID: ${id}`);
+    console.log(`Saving meeting data to ${getMeetingsFilePath()} with ID: ${id}`);
     await fileOperationManager.scheduleOperation(async (currentData) => {
       currentData.pastMeetings.unshift(newMeeting);
       return currentData;
@@ -1656,7 +1865,7 @@ async function createMeetingNoteAndRecord(platformName) {
 
     // Verify the file was written by reading it back
     try {
-      const verifyData = await fs.promises.readFile(meetingsFilePath, 'utf8');
+      const verifyData = await fs.promises.readFile(getMeetingsFilePath(), 'utf8');
       const parsedData = JSON.parse(verifyData);
       const verifyMeeting = parsedData.pastMeetings.find(m => m.id === id);
 
@@ -1670,7 +1879,7 @@ async function createMeetingNoteAndRecord(platformName) {
           setTimeout(async () => {
             try {
               // Force a file reload before sending the message
-              await fs.promises.readFile(meetingsFilePath, 'utf8');
+              await fs.promises.readFile(getMeetingsFilePath(), 'utf8');
 
               console.log(`Sending IPC message to open meeting note: ${id}`);
               mainWindow.webContents.send('open-meeting-note', id);
@@ -1748,23 +1957,26 @@ async function createMeetingNoteAndRecord(platformName) {
         global.activeMeetingIds[detectedMeeting.window.id].sessionId = uploadData.session.session_id;
         global.activeMeetingIds[detectedMeeting.window.id].recordingStartedAt = Date.now();
         global.activeMeetingIds[detectedMeeting.window.id].policyDecision = policyDecision;
+        global.activeMeetingIds[detectedMeeting.window.id].notesSessionId = uploadData.session.notes_session_id;
       }
 
-      // Spec B F8: persist notes_session_id on the meeting record itself
-      // (not just in-memory) so every future note save can sync, not just
-      // ones made while this recording is still active. Recall's own
-      // recording_id is captured the same way - needed later to trigger
-      // post-meeting Perfect Diarization (real speaker names) via
-      // /api/v1/recording/{id}/create_transcript/, separate from the live
-      // You/Them fallback used during the recording itself. Not acted on
-      // yet - just captured so it isn't lost once the recording finalizes.
-      if (uploadData && uploadData.session && (uploadData.session.notes_session_id || uploadData.session.recall_recording_id)) {
+      // Spec B F8 + Screen 08: durable notesSessionId + controlPlaneSessionId for Gemini summary.
+      if (uploadData && uploadData.session && (uploadData.session.notes_session_id || uploadData.session.recall_recording_id || uploadData.session.session_id)) {
         await updateMeetingById(id, (meeting) => {
           if (uploadData.session.notes_session_id) {
             meeting.notesSessionId = uploadData.session.notes_session_id;
           }
+          if (uploadData.session.session_id) {
+            meeting.controlPlaneSessionId = uploadData.session.session_id;
+          }
           if (uploadData.session.recall_recording_id) {
             meeting.recallRecordingId = uploadData.session.recall_recording_id;
+          }
+          if (interviewId) {
+            meeting.interviewId = interviewId;
+            meeting.link_status = 'linked';
+          } else {
+            meeting.link_status = meeting.link_status || 'unlinked';
           }
         });
       }
@@ -2087,19 +2299,76 @@ async function processTranscriptData(evt) {
   }
 }
 
-// Function to generate AI summary from transcript with streaming support
-// Local AI summarization (this function used to call OpenAI/OpenRouter/Claude
-// directly from the desktop process) is removed per the TI Recall handoff:
-// "NEVER: call LLMs from the desktop app." Structured signal extraction now
-// happens server-side (Temporal C1) and lands on the Salesforce Job Applicant
-// timeline instead. Signature kept so the existing IPC handlers/renderer
-// calls degrade to a clear message rather than crashing.
-async function generateMeetingSummary(_meeting, progressCallback = null) {
-  const message = 'AI summary generation was removed from the desktop app. Interview signal extraction now happens server-side and appears on the Salesforce Job Applicant timeline.';
-  if (progressCallback) {
-    progressCallback(message);
+/**
+ * Screen 08 — Gemini summary via control-plane (never Claude, never local LLM).
+ * Polls until ready/error/timeout. Updates meeting.aiSummary* fields.
+ */
+async function generateMeetingSummary(meeting, progressCallback = null) {
+  const notesSessionId = meeting.notesSessionId;
+  if (!notesSessionId) {
+    const msg = 'No notes session — finish a recording signed in so summary can run on the server (Gemini).';
+    if (progressCallback) progressCallback(msg);
+    return { error: msg, aiSummary: null, aiSummaryStatus: 'error' };
   }
-  return message;
+
+  if (progressCallback) progressCallback('Writing notes…');
+
+  // Ensure server has transcript for re-summarize path
+  const utterances = (meeting.transcript || []).map((t, i) => ({
+    speaker: t.speaker || 'Speaker',
+    start_ms: typeof t.start_ms === 'number' ? t.start_ms : i * 1000,
+    end_ms: typeof t.end_ms === 'number' ? t.end_ms : i * 1000 + 500,
+    text: t.text || '',
+  }));
+
+  const start = await controlPlaneClient.requestMeetingSummary(notesSessionId, {
+    sessionId: meeting.controlPlaneSessionId,
+    utterances,
+    template: meeting.interviewId || meeting.interview_id ? 'recruiter' : 'general',
+  });
+  if (start.status !== 'success') {
+    return { error: start.message, aiSummary: null, aiSummaryStatus: 'error' };
+  }
+
+  // Perf audit (2026-07-25, Grok P1): fixed 1.5-2s polling for up to 120s is
+  // ~60-80 requests per meeting. Exponential backoff bounds this to ~15
+  // requests while still surfacing a fast summary quickly.
+  const deadline = Date.now() + 120000;
+  let delay = 1500;
+  const MAX_DELAY_MS = 10000;
+  while (Date.now() < deadline) {
+    const polled = await controlPlaneClient.fetchMeetingSummary(notesSessionId);
+    if (polled.status !== 'success') {
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(Math.round(delay * 1.6), MAX_DELAY_MS);
+      continue;
+    }
+    const s = polled.summary;
+    if (s.status === 'ready') {
+      if (progressCallback) progressCallback(s.tldr || s.markdown || 'Summary ready');
+      return {
+        error: null,
+        aiSummary: s.markdown || s.tldr,
+        aiSummaryTldr: s.tldr,
+        aiSummarySections: s.sections,
+        aiSummaryProvenance: s.provenance,
+        aiSummaryStatus: 'ready',
+        provider: 'gemini',
+        model: s.model,
+      };
+    }
+    if (s.status === 'error' || s.status === 'skipped') {
+      return {
+        error: s.error || s.skip_reason || 'Summary failed',
+        aiSummary: null,
+        aiSummaryStatus: s.status,
+      };
+    }
+    if (progressCallback) progressCallback(s.status === 'writing' ? 'Writing notes…' : 'Queued…');
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(Math.round(delay * 1.6), MAX_DELAY_MS);
+  }
+  return { error: 'Summary timed out — try Re-summarize', aiSummary: null, aiSummaryStatus: 'error' };
 }
 
 // Function to update a note with recording information when recording ends
@@ -2141,39 +2410,26 @@ async function updateNoteWithRecordingInfo(recordingId) {
       return currentData;
     });
 
-    // Generate AI summary if there's a transcript
+    // Screen 08 — Gemini summary via control-plane (does not clobber My Notes)
     if (meeting.transcript && meeting.transcript.length > 0) {
-      console.log(`Generating AI summary for meeting ${meeting.id}...`);
+      console.log(`Generating Gemini AI summary for meeting ${meeting.id}...`);
 
-      // Log summary generation to console instead of showing a notification
-      console.log('Generating AI summary for meeting: ' + meeting.id);
-
-      // Get meeting title for use in the new content
-      const meetingTitle = meeting.title || "Meeting Notes";
-
-      // Create initial content with placeholder
-      meeting.content = 'Generating summary...';
-
-      // Notify any open editors immediately
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('summary-update', {
           meetingId: meeting.id,
-          content: meeting.content
+          content: 'Writing notes…',
+          aiSummaryStatus: 'writing',
         });
       }
 
-      // Create progress callback for streaming updates
       const streamProgress = (currentText) => {
-        // Update content with current streaming text
-        meeting.content = currentText;
-
-        // Send immediate update to renderer if note is open
         if (mainWindow && !mainWindow.isDestroyed()) {
           try {
             mainWindow.webContents.send('summary-update', {
               meetingId: meeting.id,
-              content: meeting.content,
-              timestamp: Date.now() // Add timestamp to ensure uniqueness
+              content: currentText,
+              aiSummaryStatus: 'writing',
+              timestamp: Date.now(),
             });
           } catch (err) {
             console.error('Error sending streaming update to renderer:', err);
@@ -2181,17 +2437,23 @@ async function updateNoteWithRecordingInfo(recordingId) {
         }
       };
 
-      // Generate the summary with streaming updates
-      const summary = await generateMeetingSummary(meeting, streamProgress);
-
-      // Save the updated data with summary, against fresh data by id (not
-      // this function's stale initial snapshot)
+      const result = await generateMeetingSummary(meeting, streamProgress);
       await updateMeetingById(meeting.id, (m) => {
-        m.content = `${summary}`;
-        m.hasSummary = true;
+        if (result.aiSummary) {
+          m.aiSummary = result.aiSummary;
+          m.aiSummaryTldr = result.aiSummaryTldr || null;
+          m.aiSummarySections = result.aiSummarySections || null;
+          m.aiSummaryProvenance = result.aiSummaryProvenance || null;
+          m.aiSummaryStatus = 'ready';
+          m.hasSummary = true;
+          m.summaryProvider = 'gemini';
+        } else {
+          m.aiSummaryStatus = result.aiSummaryStatus || 'error';
+          m.hasSummary = false;
+        }
       });
 
-      console.log('Updated meeting note with AI summary');
+      console.log('Updated meeting with Gemini AI summary', result.aiSummaryStatus || result.error);
     }
 
     // If the note is currently open, notify the renderer to refresh it

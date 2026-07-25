@@ -1,6 +1,6 @@
 # PLAN — Screen 08 family: Post-call review (Summary / Notes / Transcript, Smart-attach, unlinked flyout)
 
-**Status:** draft, pre-review (entering `/autoplan`)
+**Status:** SUPERSEDED for execution by [`PLAN-screen-08-post-call-v2.md`](./PLAN-screen-08-post-call-v2.md) (2026-07-24). This file keeps autoplan review history only. **Summary provider = Gemini (not Claude).**
 **Repos touched:** `asymbl-ti-desktop` (primary — UI, renderer, main process), `Recall` backend (`gcp/control-plane`, `gcp/extraction-worker` — new endpoints/prompt)
 **Design source:** Claude Design project `019de4a3-82fc-70a7-a039-c5cdb112e5cf` ("Recall by Asymbl"), reference export at `/Users/sdevinarayanan/Downloads/TI Recall (1)/` (verified current — see §1)
 **Supersedes:** task #26 ("Post-call review screen (screen 07)") — same screen, this export's own spec numbers it 08; folding #26 into this plan, not tracking separately.

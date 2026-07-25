@@ -96,7 +96,7 @@ async function refreshSession() {
  * supplement capture (a bot capture is triggered by bot.recording_done
  * instead, in recall-webhook). Called once per recording, when it ends.
  */
-async function finalizeDesktopSession(sessionId, { endedAt, finalSeconds, transcriptArtifacts }) {
+async function finalizeDesktopSession(sessionId, { endedAt, finalSeconds, transcriptArtifacts, skipSummary, notes }) {
   const accessToken = authStore.getAccessToken();
   if (!accessToken) {
     return { status: 'error', message: 'Not signed in' };
@@ -104,12 +104,134 @@ async function finalizeDesktopSession(sessionId, { endedAt, finalSeconds, transc
   try {
     const response = await axios.post(
       `${CONTROL_PLANE_URL}/api/ti/desktop/sessions/${sessionId}/finalize`,
-      { ended_at: endedAt, final_seconds: finalSeconds, transcript_artifacts: transcriptArtifacts },
-      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 10000 }
+      {
+        ended_at: endedAt,
+        final_seconds: finalSeconds,
+        transcript_artifacts: transcriptArtifacts,
+        skip_summary: Boolean(skipSummary),
+        notes: notes || [],
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 30000 }
     );
     return { status: 'success', result: response.data };
   } catch (error) {
     console.error('Error finalizing desktop session:', error.message);
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+/** Screen 08 — poll Gemini summary (never Claude on this path). */
+async function fetchMeetingSummary(notesSessionId) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return { status: 'error', message: 'Not signed in' };
+  try {
+    const response = await axios.get(`${CONTROL_PLANE_URL}/api/ti/desktop/notes/${notesSessionId}/summary`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 15000,
+    });
+    return { status: 'success', summary: response.data };
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return { status: 'success', summary: { status: 'none' } };
+    }
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+async function requestMeetingSummary(notesSessionId, { sessionId, utterances, notes, template } = {}) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return { status: 'error', message: 'Not signed in' };
+  try {
+    const response = await axios.post(
+      `${CONTROL_PLANE_URL}/api/ti/desktop/notes/${notesSessionId}/generate-summary`,
+      {
+        session_id: sessionId,
+        utterances,
+        notes,
+        template: template || 'general',
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 30000 }
+    );
+    return { status: 'success', result: response.data };
+  } catch (error) {
+    return { status: 'error', message: error.response?.data?.error || error.message };
+  }
+}
+
+/** Screen 08c — Salesforce search for link flyout */
+async function searchSalesforce(query) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return { status: 'error', message: 'Not signed in' };
+  try {
+    const response = await axios.get(`${CONTROL_PLANE_URL}/api/ti/desktop/sf/search`, {
+      params: { q: query },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 15000,
+    });
+    return { status: 'success', results: response.data.results || [] };
+  } catch (error) {
+    return { status: 'error', message: error.response?.data?.error || error.message, code: error.response?.status };
+  }
+}
+
+/** Screen 08 — persist link selection before upload */
+async function linkMeetingRecords(notesSessionId, { sessionId, linkedRecords } = {}) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return { status: 'error', message: 'Not signed in' };
+  try {
+    const response = await axios.post(
+      `${CONTROL_PLANE_URL}/api/ti/desktop/notes/${notesSessionId}/link`,
+      {
+        session_id: sessionId,
+        linked_records: linkedRecords || [],
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 15000 }
+    );
+    return { status: 'success', result: response.data };
+  } catch (error) {
+    return { status: 'error', message: error.response?.data?.error || error.message, code: error.response?.status };
+  }
+}
+
+/** Screen 08 Phase 4 — write summary to SF as ContentNote (or Task fallback) */
+async function confirmUploadMeeting(notesSessionId, { sessionId, meetingTitle, linkedRecords } = {}) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return { status: 'error', message: 'Not signed in' };
+  try {
+    const response = await axios.post(
+      `${CONTROL_PLANE_URL}/api/ti/desktop/notes/${notesSessionId}/confirm-upload`,
+      {
+        session_id: sessionId,
+        meeting_title: meetingTitle,
+        linked_records: linkedRecords || [],
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 45000 }
+    );
+    return { status: 'success', result: response.data };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: error.response?.data?.error || error.message,
+      code: error.response?.status,
+    };
+  }
+}
+
+/**
+ * Screen 08 "Discard": deletes the server-side summary + transcript docs.
+ * Never calls confirm-upload - Discard must only be reachable before a
+ * meeting has been uploaded to Salesforce.
+ */
+async function discardMeetingSummary(notesSessionId) {
+  const accessToken = authStore.getAccessToken();
+  if (!accessToken) return { status: 'error', message: 'Not signed in' };
+  try {
+    const response = await axios.delete(`${CONTROL_PLANE_URL}/api/ti/desktop/notes/${notesSessionId}/discard`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 15000,
+    });
+    return { status: 'success', result: response.data };
+  } catch (error) {
     return { status: 'error', message: error.response?.data?.error || error.message };
   }
 }
@@ -181,4 +303,18 @@ async function fetchTodaySchedule() {
   }
 }
 
-module.exports = { createDesktopSdkUpload, refreshSession, finalizeDesktopSession, fetchBootstrap, fetchNextEvent, fetchTodaySchedule, CONTROL_PLANE_URL };
+module.exports = {
+  createDesktopSdkUpload,
+  refreshSession,
+  finalizeDesktopSession,
+  fetchBootstrap,
+  fetchNextEvent,
+  fetchTodaySchedule,
+  fetchMeetingSummary,
+  requestMeetingSummary,
+  discardMeetingSummary,
+  searchSalesforce,
+  linkMeetingRecords,
+  confirmUploadMeeting,
+  CONTROL_PLANE_URL,
+};
