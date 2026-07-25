@@ -12,6 +12,19 @@ let uiHooks = {};
 // rail (renderRail) and the flyout search results (runSearch).
 const CHIP_TONE = { Interview: 'blue', Job: 'blue', JobApplicant: 'blue', Contact: 'green', Account: 'purple', Opportunity: 'amber' };
 
+// Verified live (2026-07-25): same class of bug as sf_reconnect_required -
+// internal error codes/messages (e.g. "gemini_api_key_missing", or a raw
+// Temporal "Failed to start Workflow") were rendered to the user verbatim.
+// Shared by renderSummary (auto-poll path) and the Re-summarize button's own
+// handler (which used to write result.error straight to the DOM).
+const SUMMARY_ERROR_MESSAGES = {
+  gemini_api_key_missing: "The server's Gemini API key isn't configured yet. Try again after that's fixed, or keep editing your notes.",
+  empty_transcript: 'No transcript was captured for this call, so there was nothing to summarize.',
+};
+function summaryErrorMessage(error) {
+  return SUMMARY_ERROR_MESSAGES[error] || 'Try Re-summarize. Summary uses Gemini on the server.';
+}
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -157,7 +170,7 @@ export function renderSummary(meeting) {
   }
   if (status === 'error') {
     label.textContent = '✦ Summary unavailable';
-    body.textContent = meeting.aiSummaryError || 'Try Re-summarize. Summary uses Gemini on the server.';
+    body.textContent = summaryErrorMessage(meeting.aiSummaryError);
     body.className = 'pc-tldr-body';
     return;
   }
@@ -564,7 +577,13 @@ export function wirePostCallUi(hooks = {}) {
           uiHooks.onSummaryUpdated(currentMeeting.id, currentMeeting);
         }
       } else {
-        $('pcTldrBody').textContent = result.error || 'Re-summarize failed';
+        currentMeeting.aiSummaryStatus = 'error';
+        currentMeeting.aiSummaryError = result.error || null;
+        currentMeeting.hasSummary = false;
+        renderSummary(currentMeeting);
+        if (typeof uiHooks.onSummaryUpdated === 'function') {
+          uiHooks.onSummaryUpdated(currentMeeting.id, currentMeeting);
+        }
       }
     } finally {
       $('pcResummarize').disabled = false;
