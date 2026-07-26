@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('notificationAPI', {
   openPreBrief: () => ipcRenderer.invoke('notification:openPreBrief'),
   remindLater: () => ipcRenderer.invoke('notification:remindLater'),
   dontCapture: () => ipcRenderer.invoke('notification:dontCapture'),
+  dismiss: () => ipcRenderer.invoke('notification:dismiss'),
   requestResize: (height) => ipcRenderer.send('notification:resize', height),
 });

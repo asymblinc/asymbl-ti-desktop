@@ -128,6 +128,18 @@ describe('meeting-notification-window', () => {
     expect(mockWindow.hide).toHaveBeenCalledTimes(1);
   });
 
+  it('registerNotificationActionHandlers wires a plain dismiss that hides the panel with no business action', async () => {
+    registerNotificationActionHandlers({});
+
+    const dismissHandler = electronMock.__state.ipcHandlers.get('notification:dismiss');
+    expect(dismissHandler).toBeTruthy();
+
+    await showMeetingNotification({ meetingUrl: 'https://zoom.us/j/test10' });
+    await dismissHandler({});
+
+    expect(mockWindow.hide).toHaveBeenCalledTimes(1);
+  });
+
   it('registerNotificationActionHandlers wires the resize channel to update the window height', async () => {
     registerNotificationActionHandlers({});
     await showMeetingNotification({ meetingUrl: 'https://zoom.us/j/test9' });

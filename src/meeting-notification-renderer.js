@@ -53,6 +53,7 @@ const sublineEl = document.getElementById('subline');
 const startBtn = document.getElementById('startBtn');
 const startLabel = document.getElementById('startLabel');
 const chevronBtn = document.getElementById('chevronBtn');
+const dismissBtn = document.getElementById('dismissBtn');
 const expandEl = document.getElementById('expand');
 
 let currentMeeting = null;
@@ -189,6 +190,10 @@ async function runAction(action) {
 }
 
 startBtn.addEventListener('click', () => runAction('startCapture'));
+dismissBtn.addEventListener('click', (event) => {
+  event.stopPropagation(); // don't let it bubble to panel's mouseenter/expand handling
+  window.notificationAPI.dismiss();
+});
 
 // Keyboard shortcuts (B/P/R/D) - active only while this panel is visible
 // (this window only exists while a meeting is being nudged), not registered

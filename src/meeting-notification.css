@@ -138,6 +138,25 @@ html, body {
 }
 .notif-chevron-btn:hover { filter: brightness(1.08); }
 
+.notif-dismiss-btn {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--brand-gray);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.notif-dismiss-btn:hover {
+  background: rgba(25, 29, 71, 0.08);
+  color: var(--brand-ink-navy);
+}
+
 .notif-expand {
   border-top: 1px solid rgba(25, 29, 71, 0.06);
 }

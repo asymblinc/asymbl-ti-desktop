@@ -141,6 +141,15 @@ function registerNotificationActionHandlers(handlers) {
   wire('notification:remindLater', 'remindLater');
   wire('notification:dontCapture', 'dontCapture');
 
+  // Plain dismiss - closes this notification only, no capture-policy side
+  // effect (unlike dontCapture, which suppresses the meeting for the
+  // session). Doesn't go through wire()/onActionCallback since there's no
+  // business action to run, just hide the window.
+  ipcMain.removeHandler('notification:dismiss');
+  ipcMain.handle('notification:dismiss', () => {
+    hideMeetingNotification();
+  });
+
   ipcMain.removeHandler('notification:resize');
   ipcMain.on('notification:resize', (_event, height) => {
     if (notificationWindow && !notificationWindow.isDestroyed()) {
