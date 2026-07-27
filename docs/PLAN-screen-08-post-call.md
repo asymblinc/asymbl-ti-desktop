@@ -84,7 +84,8 @@ Ship the Post-call review screen family — the moment right after a capture end
 **0B. Existing Code Leverage.** Already covered in §2 above (current backend architecture vs. what's required) — no duplication, this section maps 1:1 to real code already read (`sessions.ts`, `extract.ts`, `prompts.ts`, `PLAN-rich-notes.md`).
 
 **0C. Dream State Mapping.**
-```
+
+```text
 CURRENT STATE                          THIS PLAN                              12-MONTH IDEAL
 Single interview_id gate.    --->      linked_records[] + link_status;  --->   Every capture auto-classified,
 No summary unless linked.              always-on general summary;             correctly filed, or explicitly
@@ -93,10 +94,12 @@ Smart-attach doesn't exist.            Smart-attach ranking service            s
                                         (Job/Contact/Account/Opp).             an eval set, cost-tiered by
                                                                                 capture type.
 ```
+
 This plan moves toward the ideal on linkage generality and summary availability, but (per dual-voice findings below) moves *away* from it on privacy/consent posture and cost control unless those gaps are closed first.
 
 **0C-bis. Implementation Alternatives.**
-```
+
+```text
 APPROACH A: As planned (all 5 phases, one plan)
   Effort: XL   Risk: High
   Pros: UI and backend generalize together, no throwaway work
@@ -143,7 +146,8 @@ scoped, missing consent), A-with-consent-gate=9/10, B=7/10 (safer but reopens th
 - #22, #23, #24: `decide_later`, `kept_internal`, and `Discard` are all under-specified as durable states — no reversibility, audit history, or precise definition of what "discard" actually deletes across 3+ systems.
 
 **CEO DUAL VOICES — CONSENSUS TABLE:**
-```
+
+```text
 ═══════════════════════════════════════════════════════════════════
   Dimension                            Claude   Codex   Consensus
   ──────────────────────────────────── ─────── ─────── ───────────
@@ -175,20 +179,23 @@ You said (this session, earlier): summaries should generate regardless of Salesf
 Codex's strongest challenge: build deterministic pre-linking + on-demand (not automatic) summary + one confirmed write path first, and measure real usage before committing to durable storage, ranking, provenance, and reminders. This is in tension with the Premise Gate answer you already gave this session (one bundled plan) — that answer resolved *whether UI and backend ship together*, not *whether the full backend scope (multi-object ranking, provenance, decide_later queue) should all land in v1 vs. a smaller v1 slice*. If we're wrong to ship full scope at once, the cost is: providing large amounts of exact but unvalidated infrastructure (Smart-attach ranking, provenance UI, reminder queue) before knowing if recruiters actually want the review workflow at all.
 
 ### 0D — Mode-Specific Analysis (SELECTIVE EXPANSION)
+
 Scope held at the bundled plan the user confirmed. Expansion opportunities surfaced by the dual voices (pre-call linkage via calendar context, success metrics, admin-configurable object taxonomy) are cherry-pick candidates — deferred to TODOS.md individually below, not silently added.
 
 ### 0E — Temporal Interrogation
+
 **Hour 1:** Phase 0 data model change (linked_records[], notes-with-privacy-flag) ships; nothing user-visible yet — existing single-interview_id flows must not regress.
 **Hour 6+:** Phase 1 (always-on summary) is live — this is the hour the consent-gate decision (Challenge 1) actually matters in production; shipping without resolving it means real data exposure starts here, not at full Phase 4 completion.
 
 ### 0F — Mode Confirmation
+
 SELECTIVE EXPANSION confirmed (per autoplan Phase 1 override). Proceeding to Sections 1-11.
 
 ---
 
 ### Section 1 — Architecture Review
 
-```
+```text
 DEPENDENCY GRAPH (new components, relation to existing):
 
   desktop UI (post-call.jsx port)
@@ -210,7 +217,8 @@ DEPENDENCY GRAPH (new components, relation to existing):
 ```
 
 **Data flow — 4 paths, for the new "generate summary on finalize" flow:**
-```
+
+```text
   HAPPY:  finalize → notes+transcript persisted → summary prompt → summary+provenance stored → UI shows it
   NIL:    finalize with zero notes → summary prompt runs on transcript alone → UI shows "built from
           transcript alone" (08b spec's N1 scenario — already specified, good)
@@ -221,7 +229,8 @@ DEPENDENCY GRAPH (new components, relation to existing):
 ```
 
 **State machine — `link_status`:**
-```
+
+```text
         ┌─────────┐  link chosen   ┌────────┐
         │unlinked │───────────────▶│ linked │
         └────┬────┘                └────────┘
@@ -232,6 +241,7 @@ DEPENDENCY GRAPH (new components, relation to existing):
         └──────────────┘   (Codex #23:   └─────────────┘
          no reversal path   no reversal/reassignment path defined either — GAP)
 ```
+
 Both terminal-looking states (`kept_internal`, `decide_later`) lack a documented transition back to `linked` — Codex findings #22/#23 confirmed. **Auto-decided (P5, explicit>clever):** add explicit transitions `kept_internal → linked` (admin/user override) and `decide_later → linked | kept_internal` (resolution) to the schema now, before Phase 0 ships, rather than discovering the need for a migration later.
 
 **Coupling:** `sessions.ts` gains a hard dependency on the new Smart-attach ranking service and the new general-summary prompt — both single points of failure for `finalizeSession`, which today has none. **Auto-decided (P1, completeness):** both calls must be non-blocking / best-effort with respect to `finalizeSession`'s own success — a ranking-service outage must not fail session finalization.
@@ -246,7 +256,7 @@ Both terminal-looking states (`kept_internal`, `decide_later`) lack a documented
 
 ### Section 2 — Error & Rescue Map
 
-```
+```text
 METHOD/CODEPATH                          | WHAT CAN GO WRONG              | EXCEPTION CLASS
 ------------------------------------------|--------------------------------|-------------------
 general-summary prompt call (new)         | Anthropic API timeout          | TimeoutError
@@ -273,6 +283,7 @@ ValidationError (SF)   | Partial  | spec's N5 covers permission; duplicate  | un
                         |          | rule / validation rule failure not     | duplicate/validation
                         |          | covered                                 | case
 ```
+
 **Auto-decided (P1, completeness — this is exactly the "boil the ocean" case, cheap with CC):** every GAP row above gets a rescue action added to Phase 1/2/4 scope: LLM timeout/rate-limit → retry-with-backoff then degrade to "summary pending, retry later" state (mirrors the Mule proxy's own timeout pattern from earlier this session); empty transcript → short-circuit before the LLM call with a "nothing to summarize" state; SF write validation/duplicate failures → surface the SF error message verbatim in the confirm-and-upload flow rather than a generic failure.
 
 ### Section 3 — Security & Threat Model
@@ -286,7 +297,7 @@ This section is where **User Challenge 1** (unconditional summarization removing
 
 ### Section 4 — Data Flow & Interaction Edge Cases
 
-```
+```text
 INTERACTION              | EDGE CASE                          | HANDLED?  | HOW
 --------------------------|-------------------------------------|-----------|----------------------------
 Confirm & upload          | Double-click submit                 | ?         | GAP — no idempotency key on
@@ -302,6 +313,7 @@ Notes editor              | Note marked private after summary    | ?         | G
                           |                                      |           Codex #14, provenance
                           |                                      |           staleness)
 ```
+
 **Auto-decided (P1):** the 4 GAP rows get explicit handling added to Phase 3/1 scope — idempotency key on confirm-and-upload (prevents double-submit duplicate SF writes), disable Re-summarize button while a generation is in-flight, and re-summarize must invalidate/regenerate the provenance rail (not just the summary text) so a newly-privatized note can't linger in a stale "IN SUMMARY" badge.
 
 ### Section 5 — Code Quality Review
@@ -310,7 +322,7 @@ No code exists yet (plan stage). Applying the review to the *plan's described pa
 
 ### Section 6 — Test Review
 
-```
+```text
 NEW UX FLOWS: confirm-and-upload (multi-attach), notes editing post-call, re-summarize,
   link flyout (search/create/keep-internal/decide-later), attention-queue surfacing (deferred, see below)
 
@@ -327,6 +339,7 @@ NEW INTEGRATIONS: Smart-attach SOSL/SOQL service, general-summary Anthropic call
 
 NEW ERROR/RESCUE PATHS: all 5 GAP rows from Section 2
 ```
+
 Test ambition check: the 2am-Friday test is "does a private note ever appear in an uploaded SF summary" — this needs an explicit regression test, not just a manual QA pass, given Codex #16's structural-enforcement concern. **Auto-decided (P1):** add a test asserting private-flagged notes are excluded from (a) the LLM prompt payload and (b) the SF write payload, at the unit level, not just UI-level hiding.
 
 **Test plan artifact** written to `~/.gstack/projects/asymbl-ti-desktop/{user}-{branch}-eng-review-test-plan-{datetime}.md` during the Eng Review phase (per that skill's own instructions) — not duplicated here.
@@ -388,7 +401,7 @@ Information architecture and interaction-state coverage are strong in the underl
 
 ## CEO Review — Completion Summary
 
-```
+```text
 +====================================================================+
 |            MEGA PLAN REVIEW — COMPLETION SUMMARY (Phase 1/4)       |
 +====================================================================+
@@ -430,6 +443,7 @@ Information architecture and interaction-state coverage are strong in the underl
 ## Phase 2 — Design Review (via /autoplan)
 
 ### Step 0: Initial rating
+
 **7/10 on visual specificity** (colors/spacing/typography are pixel-exact, hand-font/badge/chip system is intentional, low AI-slop risk) — **3/10 on interaction-state completeness** (loading/error/partial/empty states, accessibility, responsive behavior are almost entirely unspecified). No `DESIGN.md` exists in this repo — proceeding with universal design principles, existing token system (`tokens.css`) as the only formal design-system anchor.
 
 ### Dual Voices
@@ -439,7 +453,8 @@ Information architecture and interaction-state coverage are strong in the underl
 **CODEX (design — UX challenge), 25 findings:** independently confirms several of the above (no result state, no Discard confirmation, no loading states, T9 acknowledged-then-deferred) and adds: responsive strategy is fixed-pixel with no breakpoints/min-window-size/collapse behavior; scroll ownership across 5 independent regions is unspecified; **accessibility is absent, not aspirational** — tabs are unlabeled `<span>`s with no ARIA/keyboard model, the flyout's search is a decorative span not a real input, result rows are `<div>`s not buttons, text runs 9-12px with no minimum-target-size standard, contrast on `--ink-5`/10px text and the 45%-dimmed background is unverified; multi-attach selection semantics are contradictory (primary has no checkbox and reads as mandatory, secondaries default-checked); confidence percentages ("94%") create false authority over what the plan itself calls weak/ambiguous matching signals; provenance is presented as certainty an LLM cannot actually guarantee; **the "Stays local until you confirm" UI string is now a materially false product promise** given the architecture (and the user's explicit Challenge-1 decision to ship without a consent gate) — this is a copy-accuracy defect, independent of and not reopening that architecture decision; the visible-but-out-of-scope Transcript tab is a dead affordance that should be explicitly disabled, not silently broken.
 
 **DESIGN DUAL VOICES — LITMUS SCORECARD:**
-```
+
+```text
 ═══════════════════════════════════════════════════════════════════
   Litmus check                                    Verdict
   ────────────────────────────────────────────── ──────────────────
@@ -457,13 +472,16 @@ brand specificity). The gap is entirely in unspecified STATES and ACCESSIBILITY,
 ```
 
 ### Auto-decided (P1, completeness — cheap with CC, currently silent gaps), added to Phase 3 scope:
+
 Confirm-and-upload gets explicit in-flight/success/failure states (spinner+disable → success confirmation with SF record link → inline error with retry, matching Section 2's rescue actions). Discard gets destructive styling + a one-step confirm ("Discard this call? This can't be undone."). Summary/Smart-attach get skeleton-loading states appearing immediately on finalize. Notes/Transcript-tab confirm buttons surface a read-only "Filing to: X — see Summary tab to change" line rather than acting on invisible state. Default-uncheck any "Also attach" suggestion below 80% confidence. The private-note toggle gets an explicit hover-reveal affordance on each note row. The Transcript-tab entry is disabled/grayed (not hidden, not silently clickable-but-dead) until 08a ships. The flyout gets an explicit Escape/click-outside = no-op decision (does NOT implicitly trigger Decide later — that requires deliberate footer action). Tabs get real `button`/ARIA-tab semantics with keyboard arrow support; the flyout's search becomes a real `<input>`; result rows become real buttons — baseline accessibility, not optional. Confidence percentages get a qualifying label ("estimated match," not bare "94%") given the plan's own admission these are weak signals. Provenance cards get language framing them as supporting context ("likely informed this line"), not causal fact. **The "Stays local until you confirm" string is corrected to accurately describe what actually happens** (transcript/non-private notes are sent for summarization on finalize; only the Salesforce write itself waits for confirmation) — a copy fix, not a reopening of the already-decided no-consent-gate architecture.
 
 ### Deferred to TODOS.md (real scope, not this plan's job to fully solve now):
+
 Responsive/min-window-size strategy for Post-call (ties to existing backlog item T12, "Define minimum window size + collapse behavior," already pending) — this plan's phases don't re-solve T12, they inherit whatever T12 eventually decides. "Create record from call" needs its own small design pass across 5 object types before Phase 4 builds it (already flagged in CEO Phase 1). Navigate-away-mid-upload's full resumability/background-continuation story (idempotency key from Section 4 handles duplicate-write safety; full background-continuation UX is bigger than this plan's scope) — logged as a residual gap, not silently dropped.
 
 ## Design Review — Completion Summary
-```
+
+```text
 +====================================================================+
 |         DESIGN PLAN REVIEW — COMPLETION SUMMARY (Phase 2/4)        |
 +====================================================================+

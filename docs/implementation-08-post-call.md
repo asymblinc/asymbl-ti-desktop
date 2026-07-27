@@ -16,6 +16,7 @@ Companion to `docs/PLAN-screen-08-post-call.md` (the review-process document —
 ## 2. Component index — every element, its color/behavior, its connected functionality
 
 ### Shared shell (all 3 states)
+
 | Component | Visual (tokens.css) | Connected functionality | Backend touchpoint |
 |---|---|---|---|
 | `Captured` chip | `--green`/`--green-bg` | Static, session finalized | `sessions.ts::finalizeSession` result |
@@ -26,6 +27,7 @@ Companion to `docs/PLAN-screen-08-post-call.md` (the review-process document —
 | Confirm-and-upload button | `--ink` bg, `--paper` text | Writes link(s) + summary to SF | **NEW** SF write path (Phase 4) — needs idempotency key (Eng review finding #11) |
 
 ### 08 — Summary tab, linked case
+
 | Component | Visual | Connected functionality | Backend touchpoint |
 |---|---|---|---|
 | Avatar + title + duration/speakers/words | `--ink`, display font 22px | Static session metadata | `sessions.ts` session doc |
@@ -38,6 +40,7 @@ Companion to `docs/PLAN-screen-08-post-call.md` (the review-process document —
 | "Find another record…" | dashed border, `--ink-5` | Opens manual search | shares the flyout's search endpoint (08c) |
 
 ### 08b — Notes tab
+
 | Component | Visual | Connected functionality | Backend touchpoint |
 |---|---|---|---|
 | Notes editor | `--hand` font (Caveat), editable | Per-note text, editable post-call | **NEW** notes finalize payload `{text, transcriptOffset, private}` (Phase 0) |
@@ -47,6 +50,7 @@ Companion to `docs/PLAN-screen-08-post-call.md` (the review-process document —
 | Provenance rail cards | `--paper` bordered | note→summary-line mapping | **framed as "likely informed this line," not causal fact — LLM can't prove causality (Codex design finding #20)** |
 
 ### 08c — Unlinked + link flyout
+
 | Component | Visual | Connected functionality | Backend touchpoint |
 |---|---|---|---|
 | `Not linked` chip | `--amber`/`--amber-bg` | Session has `link_status: unlinked` | Phase 0 schema |
@@ -59,7 +63,7 @@ Companion to `docs/PLAN-screen-08-post-call.md` (the review-process document —
 
 ## 3. Backend architecture map (current state → this plan's target state)
 
-```
+```text
 TODAY:                                          TARGET (this plan):
 finalizeSession()                               finalizeSession()
   if interview_id: start Temporal                  ALWAYS: client.start() a new Temporal
@@ -138,6 +142,7 @@ Prior autoplan text that defaulted summary to Claude is **superseded**. Do not r
 **Do not put Gemini (or any provider key) in the Electron client.** Desktop always calls control-plane with Asymbl JWT; Cloud Run owns the Gemini key.
 
 ### Phase 1 implications
+
 - New general-summary job uses **Gemini API** (model TBD — e.g. `gemini-2.5-flash` / `gemini-2.5-pro` per cost/quality; pick at P1-2 with a short eval, not Claude Sonnet).
 - New Secret Manager secret e.g. `ti-gemini-api-key` (or Vertex SA + project) — **not** reusing Anthropic secret.
 - Prompt + response schema for TL;DR / topics / action items live next to (or in) control-plane / a small summary activity — **do not** call `extractInterviewSignal` for unlinked general summary.
@@ -167,6 +172,7 @@ Align with ADR-022 (one GCP project per tenant today) and OpenMeter:
    - `kept_internal` and Discard must never enqueue summary.
 
 ### Mapping to phases
+
 - Phase 1 implements **Gemini-only** general-summary + OpenMeter/log fields above.
 - Claude remains **only** on existing interview-signal extraction until product says otherwise.
 - BYOK Gemini = follow-on; reserve config without building UI now.

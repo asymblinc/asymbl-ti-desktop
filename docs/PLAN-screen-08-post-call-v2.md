@@ -28,7 +28,7 @@
 
 ## 1. Three pipelines (do not conflate)
 
-```
+```text
 A. TRANSCRIPT (exists)
    Recall Desktop SDK → local meetings.json (+ finalize upload)
    Provider: Recall (media + words only)
@@ -116,7 +116,7 @@ Design files: `post-call.jsx`, `post-call-notes-link.jsx`, `tokens.css`.
 
 ## 4. Target architecture
 
-```
+```text
 Desktop (Electron)
   meetings.json: content (my notes) | aiSummary | aiSummaryStatus | linked_records | link_status | sessionId | notesSessionId | transcript
   JWT → control-plane (Mule optional hop)
@@ -143,33 +143,39 @@ Salesforce: on Confirm — multi-attach + ContentNote / Interview signal writeba
 ## 5. Gemini summary contract
 
 ### Trigger
+
 - Finalize with non-empty transcript **and** privacy gate allows  
 - Re-summarize button  
 - After link to Interview (re-run with recruiter template) optional auto
 
 ### API (PLAN-rich-notes §5.1 shape)
-```
+
+```text
 POST /api/ti/desktop/notes/{notesSessionId}/generate-summary
 GET  /api/ti/desktop/notes/{notesSessionId}/summary
 → { status: pending|writing|ready|error, markdown?, tldr?, sections?, provenance?, error? }
 ```
 
 ### Model
+
 - **Gemini only** (pick at P1-2: e.g. `gemini-2.5-flash` default, pro if quality eval fails)  
 - Secret: `ti-gemini-api-key` or Vertex AI SA  
 - **Never** call Anthropic for this path
 
 ### Inputs
+
 - Transcript utterances  
 - Non-private notes with offsets  
 - Optional SF context after link (job title, candidate name) for template switch  
 
 ### Outputs
+
 - General: TL;DR + topics + action items  
 - Recruiter-aware (Interview context): richer sections if design requires; may still be Gemini prose, with Claude signal filling Skills/Comp cards separately  
 - Provenance map: note_id → summary line (best-effort “likely informed”, not causal claim in UI copy)
 
 ### Delivery
+
 - Temporal `Client.start` (not fire-and-forget; Cloud Run `cpu_idle` would stall)  
 - Desktop polls GET until ready  
 
@@ -192,9 +198,11 @@ Recommended default (keeps “I still want the summary” without auto-leaking p
 ## 7. Smart-attach / link flyout
 
 ### Objects (v1)
+
 Job · Job Applicant · Contact · Account · Opportunity · Interview (`bpats__Interview__c`)
 
 ### Mechanics
+
 - Search via control-plane SOSL **as the signed-in user** (`sf-session-cache` / `soqlQueryAsUser`)  
 - **`escapeSoslString()`** — SOSL reserved set ≠ SOQL (`?&|!{}[]()^~*:\"'+-`)  
 - Ownership / sharing check before surface or attach  
@@ -204,6 +212,7 @@ Job · Job Applicant · Contact · Account · Opportunity · Interview (`bpats__
   - Prefer derive “linked” from `linked_records[]`; scalar only for escape hatches  
 
 ### After link
+
 | Link type | Then |
 |-----------|------|
 | Interview | Optional start Claude signal; Gemini re-summarize with recruiter template |
@@ -230,7 +239,7 @@ ADR-022: one GCP project ≈ one tenant today → secret per project is enough f
 
 ## 9. Phases & dependency graph
 
-```
+```text
 Phase 0 — Data model & honesty (desktop + CP)
   P0-1 Transcript storage shape (chunked / object store; not unbounded Firestore doc)
   P0-2 link_status + linked_records[] model
