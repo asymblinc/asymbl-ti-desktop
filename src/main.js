@@ -203,7 +203,16 @@ app.whenReady().then(() => {
     return { signedIn, email, photoDataUri, orgId, orgName, orgIsSandbox };
   });
   ipcMain.handle('signOut', async () => {
-    authStore.clearTokens();
+    // clearTokens() throws if it couldn't delete the on-disk refresh-token
+    // file for a real reason (permissions, disk issue) - the in-memory
+    // session is already cleared by that point either way, so a rare disk
+    // failure shouldn't leave sign-out hanging/rejected for the renderer
+    // (real gap found via CodeRabbit review, 2026-07-27).
+    try {
+      authStore.clearTokens();
+    } catch (error) {
+      console.error('Failed to fully clear persisted session during sign-out:', error.code || error.name);
+    }
     refreshTrayAuthState();
   });
 

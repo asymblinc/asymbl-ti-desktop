@@ -68,7 +68,10 @@ function getPhotoDataUri() {
       photoDataUri = fs.readFileSync(photoPath(), 'utf8');
     }
   } catch (error) {
-    console.error('Failed to load persisted profile photo:', error.message);
+    // error.message from an fs error includes the full on-disk path (which
+    // contains the OS username under userData) - log the error code only,
+    // same fix as clearTokens() below (real leak found via CodeRabbit review).
+    console.error('Failed to load persisted profile photo:', error.code || error.name);
   }
   return photoDataUri;
 }
@@ -94,7 +97,7 @@ function loadPersistedRefreshToken(provider = 'sf') {
     tokens[provider] = { ...tokens[provider], refreshToken };
     return refreshToken;
   } catch (error) {
-    console.error(`Failed to load persisted refresh token (${provider}):`, error.message);
+    console.error(`Failed to load persisted refresh token (${provider}):`, error.code || error.name);
     return null;
   }
 }
@@ -109,7 +112,10 @@ function clearTokens(provider = 'sf') {
       // here let clearTokens() report success even when the refresh-token
       // file failed to delete for a real reason (permissions, disk issue) -
       // a logout caller has no way to know the credential is still on disk.
-      console.error(`Failed to remove persisted refresh token (${provider}):`, error.message);
+      // error.message (not logged here) includes the full on-disk path,
+      // which contains the OS username under userData - log the error code
+      // only (real leak found via CodeRabbit review, 2026-07-27).
+      console.error(`Failed to remove persisted refresh token (${provider}):`, error.code || error.name);
       throw error;
     }
   }
@@ -119,7 +125,7 @@ function clearTokens(provider = 'sf') {
       fs.unlinkSync(photoPath());
     } catch (error) {
       if (error.code !== 'ENOENT') {
-        console.error('Failed to remove persisted profile photo:', error.message);
+        console.error('Failed to remove persisted profile photo:', error.code || error.name);
       }
     }
   }

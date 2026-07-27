@@ -277,9 +277,9 @@
           <span class="pc-chip pc-chip-amber" id="pcChipUnlinked" style="display:none;">Not linked</span>
           <div style="flex:1"></div>
           <div class="pc-tabs" role="tablist" aria-label="Post-call tabs">
-            <button type="button" class="pc-tab" role="tab" id="pcTabSummary" aria-selected="true" data-tab="summary">Summary</button>
-            <button type="button" class="pc-tab" role="tab" id="pcTabNotes" aria-selected="false" data-tab="notes">Notes</button>
-            <button type="button" class="pc-tab" role="tab" id="pcTabTranscript" aria-selected="false" data-tab="transcript" title="Transcript tab design pending">Transcript</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabSummary" aria-selected="true" aria-controls="pcSummaryPane" data-tab="summary">Summary</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabNotes" aria-selected="false" aria-controls="pcNotesPane" data-tab="notes">Notes</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabTranscript" aria-selected="false" aria-controls="pcTranscriptPane" data-tab="transcript" title="Transcript tab design pending">Transcript</button>
           </div>
           <div style="flex:1"></div>
           <button type="button" class="pc-btn-ghost" id="pcResummarize">Re-summarize</button>
@@ -290,16 +290,18 @@
           <div class="pc-main" id="pcMain">
             <div class="pc-title" id="pcTitle">Meeting</div>
             <div class="pc-meta" id="pcSubMeta" style="margin-top:4px;"></div>
-            <div class="pc-tldr" id="pcTldrCard">
-              <div class="pc-tldr-label" id="pcTldrLabel">✦ Writing notes…</div>
-              <div class="pc-tldr-body" id="pcTldrBody">Summary will appear here (Gemini).</div>
+            <div id="pcSummaryPane" role="tabpanel" aria-labelledby="pcTabSummary">
+              <div class="pc-tldr" id="pcTldrCard">
+                <div class="pc-tldr-label" id="pcTldrLabel">✦ Writing notes…</div>
+                <div class="pc-tldr-body" id="pcTldrBody">Summary will appear here (Gemini).</div>
+              </div>
+              <div class="pc-sections" id="pcSections"></div>
             </div>
-            <div class="pc-sections" id="pcSections"></div>
-            <div id="pcNotesPane" style="display:none;">
+            <div id="pcNotesPane" role="tabpanel" aria-labelledby="pcTabNotes" style="display:none;">
               <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · notes stay yours, only shared blocks upload</div>
               <textarea id="pcNotesEditor" class="pc-notes-hand" style="width:100%;min-height:220px;border:1px solid var(--paper-edge);border-radius:10px;padding:12px;resize:vertical;"></textarea>
             </div>
-            <div id="pcTranscriptPane" style="display:none;"></div>
+            <div id="pcTranscriptPane" role="tabpanel" aria-labelledby="pcTabTranscript" style="display:none;"></div>
           </div>
           <div class="pc-rail" id="pcRail">
             <div class="pc-rail-header">
@@ -319,13 +321,13 @@
             <div style="font-size:11.5px;color:var(--ink-4);line-height:1.45;">Link it to Salesforce, keep it internal, or decide later.</div>
           </div>
           <div class="pc-flyout-search">
-            <input type="search" id="pcFlyoutSearch" placeholder="Search Salesforce…" autocomplete="off" />
+            <input type="search" id="pcFlyoutSearch" placeholder="Search Salesforce…" aria-label="Search Salesforce" autocomplete="off" />
           </div>
           <div id="pcFlyoutResults" style="padding:0 4px 10px;max-height:240px;overflow-y:auto;"></div>
           <div style="border-top:1px solid var(--paper-2);padding:8px 12px;">
-            <div class="pc-escape" id="pcCreateRecord" title="Create-record mini-form is a separate, not-yet-built slice">Create a new record from this call…</div>
-            <div class="pc-escape" id="pcKeepInternal">Keep internal — never syncs to Salesforce</div>
-            <div class="pc-escape" id="pcDecideLater">Decide later (stays in your attention queue)</div>
+            <button type="button" class="pc-escape" id="pcCreateRecord" title="Create-record mini-form is a separate, not-yet-built slice">Create a new record from this call…</button>
+            <button type="button" class="pc-escape" id="pcKeepInternal">Keep internal — never syncs to Salesforce</button>
+            <button type="button" class="pc-escape" id="pcDecideLater">Decide later (stays in your attention queue)</button>
           </div>
           <div style="border-top:1px solid var(--paper-2);padding:8px 12px;text-align:right;">
             <button type="button" class="pc-btn-ghost" id="pcFlyoutDone">Done</button>
