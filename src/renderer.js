@@ -14,8 +14,6 @@ import {
   closePostCallView,
   wirePostCallUi,
   shouldOpenPostCall,
-  isPostCallOpen,
-  renderSummary,
 } from './post-call.js';
 
 marked.setOptions({ mangle: false, headerIds: false });
@@ -2159,13 +2157,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Listen for recording completed events → Screen 08 post-call
+  // Listen for recording completed events → Screen 08 post-call. Only acts
+  // when the user is already looking at this exact meeting (real bug found
+  // via CodeRabbit review: this used to unconditionally reassign
+  // currentEditingMeetingId and force-navigate to post-call, yanking the
+  // user out of whatever unrelated note or view they were on) - matches
+  // main.js's own stated intent for this event ("if the note is currently
+  // open, notify the renderer to refresh it").
   window.electronAPI.onRecordingCompleted((meetingId) => {
     console.log('Recording completed for meeting:', meetingId);
+    const wasEditingThisMeeting = currentEditingMeetingId === meetingId;
     loadMeetingsDataFromFile().then(() => {
+      if (!wasEditingThisMeeting) return;
       const meeting = [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId);
       if (!meeting) return;
-      currentEditingMeetingId = meetingId;
       if (shouldOpenPostCall(meeting)) {
         document.getElementById('homeView').style.display = 'none';
         document.getElementById('editorView').style.display = 'none';
@@ -2173,12 +2178,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         openPostCallView(meeting);
         return;
       }
-      if (currentEditingMeetingId === meetingId) {
-        const ed = document.getElementById('simple-editor');
-        if (ed) {
-          ed.value = meeting.content;
-          syncEditorPreview(meeting.content);
-        }
+      const ed = document.getElementById('simple-editor');
+      if (ed) {
+        ed.value = meeting.content;
+        syncEditorPreview(meeting.content);
       }
     });
   });
@@ -2340,45 +2343,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Listen for summary generation events (Gemini fields live on meeting, not content)
-  window.electronAPI.onSummaryGenerated((meetingId) => {
-    console.log('Summary generated for meeting:', meetingId);
-    if (currentEditingMeetingId !== meetingId) return;
-    loadMeetingsDataFromFile().then(() => {
-      const meeting = [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId);
-      if (!meeting) return;
-      if (isPostCallOpen()) {
-        openPostCallView(meeting);
-        return;
-      }
-      // Classic editor: leave My Notes alone; summary is in aiSummary*
-    });
-  });
-
-  // Listen for streaming summary updates (Gemini — never clobbers My Notes)
-  window.electronAPI.onSummaryUpdate((data) => {
-    const { meetingId, content, aiSummaryStatus } = data;
-    if (currentEditingMeetingId !== meetingId) return;
-
-    // Prefer post-call TL;DR surface when Screen 08 is open
-    if (isPostCallOpen()) {
-      const m = pastMeetings.find((x) => x.id === meetingId);
-      if (m) {
-        m.aiSummaryStatus = aiSummaryStatus || m.aiSummaryStatus || 'writing';
-        if (content && (aiSummaryStatus === 'writing' || !aiSummaryStatus)) {
-          // progress text only
-        }
-        renderSummary(m);
-      }
-      const body = document.getElementById('pcTldrBody');
-      const label = document.getElementById('pcTldrLabel');
-      if (body && content) body.textContent = content;
-      if (label) label.textContent = '✦ Writing notes…';
-      return;
-    }
-
-    // Classic editor: do not overwrite notes content with AI status strings
-  });
+  // Summary generated/streaming-update events are handled by
+  // wirePostCallUi's own onSummaryGenerated/onSummaryUpdate listeners
+  // (post-call.js) - real duplicate-DOM-write bug found via CodeRabbit
+  // review, 2026-07-27: this file used to ALSO subscribe to both channels
+  // directly, and since ipcRenderer.on() adds a listener rather than
+  // replacing one, every event fired both handlers. The classic-editor
+  // branch here was always a no-op by design ("leave My Notes alone"), and
+  // the post-call-open branch duplicated post-call.js's own handling but
+  // via a full openPostCallView() reopen instead of just updating the
+  // summary surface - removed entirely rather than kept as a second copy.
 
   // Add event listeners for buttons
   document.querySelector('.new-note-btn').addEventListener('click', async () => {
@@ -2928,22 +2902,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-
-
-  // Listen for recording completed events
-  window.electronAPI.onRecordingCompleted((meetingId) => {
-    console.log('Recording completed for meeting:', meetingId);
-    if (currentEditingMeetingId === meetingId) {
-      // Reload the meeting data first
-      loadMeetingsDataFromFile().then(() => {
-        // Refresh the editor with the updated content
-        const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-        if (meeting) {
-          document.getElementById('simple-editor').value = meeting.content;
-          syncEditorPreview(meeting.content);
-        }
-      });
-    }
-  });
 
 });
