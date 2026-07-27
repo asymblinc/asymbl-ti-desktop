@@ -320,6 +320,15 @@ document.addEventListener('keydown', (event) => {
 // pending, which is what left the UI stuck signed-out before this fix.
 window.electronAPI.onAuthStatusChanged?.(() => {
   refreshAuthUi();
+  // Real bug found live (2026-07-27), same race class as the
+  // refreshNextEvent/refreshTodaySchedule fix above: getMeetingsFilePath()
+  // (main.js) scopes the meetings file to the signed-in user's access
+  // token, which isn't live yet on a fresh launch until this exact event
+  // fires (persisted refresh token -> network refresh -> access token).
+  // The initial DOMContentLoaded load always lost that race and silently
+  // read the (empty) legacy unscoped file - "Recent captures" showed
+  // nothing despite real data on disk, only fixed by a manual reload.
+  loadMeetingsDataFromFile();
 });
 
 // Screen 01: tray's "Start an unscheduled call" reuses the exact same

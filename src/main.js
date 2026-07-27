@@ -1606,13 +1606,28 @@ ipcMain.handle('startManualRecording', async (event, meetingId) => {
         if (!meeting.transcript) {
           meeting.transcript = [];
         }
+        // Real bug found live (2026-07-27): this manual "New Note" + record
+        // flow never stored notesSessionId, even though
+        // createDesktopSdkUpload() always mints one server-side (same call
+        // the auto-detected-meeting path uses) - Gemini summary generation
+        // failed with "No notes session" for every manually-created capture.
+        if (uploadData.session?.notes_session_id) {
+          meeting.notesSessionId = uploadData.session.notes_session_id;
+        }
+        if (uploadData.session?.session_id) {
+          meeting.controlPlaneSessionId = uploadData.session.session_id;
+        }
       });
 
       // Store tracking info for the recording
       global.activeMeetingIds = global.activeMeetingIds || {};
       global.activeMeetingIds[key] = {
         platformName: 'Desktop Recording',
-        noteId: meetingId
+        noteId: meetingId,
+        // Spec B F6 (same as the auto-detected-meeting path): finalize on
+        // recording-ended needs sessionId to know there's a session to close.
+        sessionId: uploadData.session?.session_id,
+        recordingStartedAt: Date.now()
       };
 
       // Register the recording in our active recordings tracker
