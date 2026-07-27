@@ -16,6 +16,21 @@ const authStore = require('./auth-store');
 // desktop_sdk_callback mechanism, not a client-side WebSocket to this URL.
 const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'https://control-plane-proxy-2ew73i.rajrd4-2.usa-e1.cloudhub.io';
 
+// Every catch block below returns { status: 'error', message } to IPC
+// callers, which show it directly in the renderer - error.message (the raw
+// axios/Node error, e.g. "getaddrinfo ENOTFOUND <host>") can leak internal
+// infrastructure detail and isn't meant for end users. error.response.data
+// .error is the control plane's OWN structured error code (already meant to
+// be shown - e.g. 'sf_reconnect_required', handled explicitly in
+// post-call.js), so that one still passes through. Real leak found via
+// CodeRabbit review, 2026-07-27.
+function sanitizedErrorMessage(error) {
+  const serverMessage = error.response?.data?.error;
+  return typeof serverMessage === 'string'
+    ? serverMessage
+    : 'Could not reach the server. Check your connection and try again.';
+}
+
 /**
  * F9 (Spec B, Upload Paths): mint a Recall upload token via the control
  * plane instead of a local server holding the API key.
@@ -56,7 +71,7 @@ async function createDesktopSdkUpload(decisionToken, interviewId = null) {
     return { status: 'success', upload_token: response.data.upload_token, session: response.data };
   } catch (error) {
     console.error('Error creating upload token via control plane:', error.message);
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -86,7 +101,7 @@ async function refreshSession() {
     if (error.response?.status === 401) {
       authStore.clearTokens();
     }
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -116,7 +131,7 @@ async function finalizeDesktopSession(sessionId, { endedAt, finalSeconds, transc
     return { status: 'success', result: response.data };
   } catch (error) {
     console.error('Error finalizing desktop session:', error.message);
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -134,7 +149,7 @@ async function fetchMeetingSummary(notesSessionId) {
     if (error.response?.status === 404) {
       return { status: 'success', summary: { status: 'none' } };
     }
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -154,7 +169,7 @@ async function requestMeetingSummary(notesSessionId, { sessionId, utterances, no
     );
     return { status: 'success', result: response.data };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -170,7 +185,7 @@ async function searchSalesforce(query) {
     });
     return { status: 'success', results: response.data.results || [] };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message, code: error.response?.status };
+    return { status: 'error', message: sanitizedErrorMessage(error), code: error.response?.status };
   }
 }
 
@@ -189,7 +204,7 @@ async function linkMeetingRecords(notesSessionId, { sessionId, linkedRecords } =
     );
     return { status: 'success', result: response.data };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message, code: error.response?.status };
+    return { status: 'error', message: sanitizedErrorMessage(error), code: error.response?.status };
   }
 }
 
@@ -211,7 +226,7 @@ async function confirmUploadMeeting(notesSessionId, { sessionId, meetingTitle, l
   } catch (error) {
     return {
       status: 'error',
-      message: error.response?.data?.error || error.message,
+      message: sanitizedErrorMessage(error),
       code: error.response?.status,
     };
   }
@@ -232,7 +247,7 @@ async function discardMeetingSummary(notesSessionId) {
     });
     return { status: 'success', result: response.data };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -255,7 +270,7 @@ async function fetchBootstrap() {
     });
     return { status: 'success', bootstrap: response.data };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -278,7 +293,7 @@ async function fetchNextEvent() {
     });
     return { status: 'success', nextEvent: response.data.next_event };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
@@ -299,7 +314,7 @@ async function fetchTodaySchedule() {
     });
     return { status: 'success', schedule: response.data.schedule };
   } catch (error) {
-    return { status: 'error', message: error.response?.data?.error || error.message };
+    return { status: 'error', message: sanitizedErrorMessage(error) };
   }
 }
 
