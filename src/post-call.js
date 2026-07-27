@@ -29,6 +29,25 @@ function $(id) {
   return document.getElementById(id);
 }
 
+// post-call.jsx's own example data: Skills=neutral, Comp=amber,
+// Motivation=green, Flags=accent. gemini-summary.ts's prompt only ever
+// emits one of these fixed labels per template (recruiter: Skills/Comp/
+// Motivation/Flags/Next steps; general: Topics/Decisions/Action items/
+// Open questions) - an exact lookup is both correct and simpler than a
+// keyword heuristic (the previous version tagged Skills as green and
+// Motivation as accent - backwards from the actual design). Hoisted to
+// module scope (CodeRabbit review, 2026-07-27) - was recreated on every
+// forEach iteration.
+const SECTION_TONE = {
+  comp: 'tone-amber',
+  motivation: 'tone-green',
+  flags: 'tone-accent',
+  'next steps': 'tone-accent',
+  decisions: 'tone-green',
+  'action items': 'tone-accent',
+  'open questions': 'tone-amber',
+};
+
 // Perf audit (2026-07-25, Grok P1/P4): the only way to pick up a
 // finalize-enqueued Gemini summary used to be the "Re-summarize" button,
 // which calls generate-summary and RE-ENQUEUES a second Temporal workflow -
@@ -53,12 +72,27 @@ function startSummaryPoll(meeting) {
 
   let delay = 2000;
   const MAX_DELAY_MS = 10000;
+  // Real bug found via CodeRabbit review: with no ceiling, a summary stuck
+  // in 'writing'/'pending' forever (e.g. a crashed worker) polled forever
+  // and left "Writing notes…" showing indefinitely with no way out but
+  // manually clicking Re-summarize.
+  const MAX_POLL_MS = 3 * 60 * 1000;
+  const startedAt = Date.now();
   const meetingId = meeting.id;
 
   const poll = async () => {
     // The user navigated away from this meeting - don't keep polling for a
     // view that isn't showing anymore.
     if (!currentMeeting || currentMeeting.id !== meetingId) return;
+    if (Date.now() - startedAt > MAX_POLL_MS) {
+      currentMeeting.aiSummaryStatus = 'error';
+      currentMeeting.aiSummaryError = null;
+      renderSummary(currentMeeting);
+      if (typeof uiHooks.onSummaryUpdated === 'function') {
+        uiHooks.onSummaryUpdated(meetingId, currentMeeting);
+      }
+      return;
+    }
     const res = await window.electronAPI.getMeetingSummaryStatus(meetingId);
     if (res.status === 'success') {
       const s = res.summary;
@@ -109,14 +143,10 @@ export function openPostCallView(meeting) {
   );
   // post-call.jsx meta line format: "32 min · 2 speakers · 4,212 words".
   const speakerCount = new Set((meeting.transcript || []).map((t) => t.speaker).filter(Boolean)).size;
-  $('pcDuration').textContent = `${dur} · just now`;
+  $('pcDuration').textContent = `${dur} · ${formatRelativeCompletion(meeting)}`;
   $('pcSubMeta').textContent = `${dur} · ${speakerCount} speaker${speakerCount === 1 ? '' : 's'} · ${words.toLocaleString()} words`;
 
-  const unlinked =
-    !meeting.interviewId &&
-    !meeting.interview_id &&
-    meeting.link_status !== 'linked' &&
-    !(meeting.linked_records && meeting.linked_records.length);
+  const unlinked = isUnlinked(meeting);
 
   $('pcChipUnlinked').style.display = unlinked && meeting.link_status !== 'kept_internal' ? 'inline-flex' : 'none';
   $('pcMain').classList.toggle('dimmed', unlinked && meeting.link_status !== 'kept_internal' && meeting.link_status !== 'decide_later');
@@ -152,6 +182,30 @@ function formatDurationFromMeeting(meeting) {
     if (s > 0) return `${Math.max(1, Math.round(s / 60))} min`;
   }
   return '—';
+}
+
+// Real "when" for the meta line - was hardcoded to "just now" regardless of
+// how long ago the call actually finished (found via CodeRabbit review).
+function formatRelativeCompletion(meeting) {
+  const iso = meeting.recordingEndTime || meeting.date;
+  const then = iso ? new Date(iso).getTime() : NaN;
+  if (Number.isNaN(then)) return 'just now';
+  const minutes = Math.round((Date.now() - then) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function isUnlinked(meeting) {
+  if (!meeting) return false;
+  return (
+    !meeting.interviewId &&
+    !meeting.interview_id &&
+    meeting.link_status !== 'linked' &&
+    !(meeting.linked_records && meeting.linked_records.length)
+  );
 }
 
 export function renderSummary(meeting) {
@@ -193,22 +247,6 @@ export function renderSummary(meeting) {
     const lab = document.createElement('div');
     lab.className = 'pc-section-label';
     lab.textContent = s.label;
-    // post-call.jsx's own example data: Skills=neutral, Comp=amber,
-    // Motivation=green, Flags=accent. gemini-summary.ts's prompt only ever
-    // emits one of these fixed labels per template (recruiter: Skills/Comp/
-    // Motivation/Flags/Next steps; general: Topics/Decisions/Action items/
-    // Open questions) - an exact lookup is both correct and simpler than a
-    // keyword heuristic (the previous version tagged Skills as green and
-    // Motivation as accent - backwards from the actual design).
-    const SECTION_TONE = {
-      comp: 'tone-amber',
-      motivation: 'tone-green',
-      flags: 'tone-accent',
-      'next steps': 'tone-accent',
-      decisions: 'tone-green',
-      'action items': 'tone-accent',
-      'open questions': 'tone-amber',
-    };
     const toneClass = SECTION_TONE[String(s.label || '').toLowerCase()];
     if (toneClass) lab.classList.add(toneClass);
     card.appendChild(lab);
@@ -389,8 +427,14 @@ function setTab(tab) {
     if (btn) btn.setAttribute('aria-selected', t === tab ? 'true' : 'false');
   });
   // post-call-notes-link.jsx: Notes tab's rail is 340px, not the Summary
-  // tab's 320px.
-  if ($('pcBody')) $('pcBody').classList.toggle('pc-body-wide-rail', tab === 'notes');
+  // tab's 320px. An unlinked meeting also uses the 340px rail on the
+  // Summary tab (see openPostCallView) - real bug found via CodeRabbit
+  // review: this used to key off `tab === 'notes'` alone, so switching to
+  // Notes and back to Summary silently dropped the unlinked wide-rail
+  // state openPostCallView had set.
+  if ($('pcBody')) {
+    $('pcBody').classList.toggle('pc-body-wide-rail', tab === 'notes' || isUnlinked(currentMeeting));
+  }
   if ($('pcTldrCard')) $('pcTldrCard').style.display = tab === 'summary' ? '' : 'none';
   if ($('pcSections')) $('pcSections').style.display = tab === 'summary' ? '' : 'none';
   if ($('pcNotesPane')) $('pcNotesPane').style.display = tab === 'notes' ? '' : 'none';
@@ -405,12 +449,7 @@ function setTab(tab) {
     } else if (tab === 'transcript') {
       renderTranscript(currentMeeting);
     } else {
-      const unlinked =
-        !currentMeeting.interviewId &&
-        !currentMeeting.interview_id &&
-        currentMeeting.link_status !== 'linked' &&
-        !(currentMeeting.linked_records && currentMeeting.linked_records.length);
-      renderRail(currentMeeting, unlinked);
+      renderRail(currentMeeting, isUnlinked(currentMeeting));
     }
   }
 }
@@ -549,6 +588,8 @@ export function wirePostCallUi(hooks = {}) {
       } else if (typeof hooks.onClose === 'function') {
         hooks.onClose();
       }
+    } catch (e) {
+      alert(e.message || 'Could not discard this call');
     } finally {
       btn.disabled = false;
     }
@@ -585,6 +626,14 @@ export function wirePostCallUi(hooks = {}) {
           uiHooks.onSummaryUpdated(currentMeeting.id, currentMeeting);
         }
       }
+    } catch (e) {
+      currentMeeting.aiSummaryStatus = 'error';
+      currentMeeting.aiSummaryError = null;
+      currentMeeting.hasSummary = false;
+      renderSummary(currentMeeting);
+      if (typeof uiHooks.onSummaryUpdated === 'function') {
+        uiHooks.onSummaryUpdated(currentMeeting.id, currentMeeting);
+      }
     } finally {
       $('pcResummarize').disabled = false;
     }
@@ -602,8 +651,18 @@ export function wirePostCallUi(hooks = {}) {
     if (currentMeeting?.id && selectedLinks.length) {
       const btn = $('pcFlyoutDone');
       btn.disabled = true;
+      // Real bug found via CodeRabbit review: neither a rejected promise nor
+      // a resolved-but-{success:false} result was checked, so the flyout
+      // closed as if the link had succeeded even when it hadn't.
       try {
-        await window.electronAPI.linkMeetingRecords(currentMeeting.id, selectedLinks);
+        const res = await window.electronAPI.linkMeetingRecords(currentMeeting.id, selectedLinks);
+        if (!res?.success) {
+          alert(res?.error || 'Could not link these records');
+          return;
+        }
+      } catch (e) {
+        alert(e.message || 'Could not link these records');
+        return;
       } finally {
         btn.disabled = false;
       }
