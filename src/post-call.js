@@ -59,7 +59,7 @@ function startSummaryPoll(meeting) {
     // The user navigated away from this meeting - don't keep polling for a
     // view that isn't showing anymore.
     if (!currentMeeting || currentMeeting.id !== meetingId) return;
-    const res = await window.electronAPI.getMeetingSummaryStatus(meeting.notesSessionId);
+    const res = await window.electronAPI.getMeetingSummaryStatus(meetingId);
     if (res.status === 'success') {
       const s = res.summary;
       if (s.status === 'ready' || s.status === 'error' || s.status === 'skipped') {

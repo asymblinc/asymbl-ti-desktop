@@ -530,20 +530,37 @@ function currentUserScopeId() {
 }
 
 const LEGACY_MEETINGS_FILE_PATH = path.join(app.getPath('userData'), 'meetings.json');
+// CodeRabbit finding: currentUserScopeId() returning null (signed out, or a
+// token that failed to decode) used to fall back to the SAME
+// LEGACY_MEETINGS_FILE_PATH that the P0-8 per-user-scoping fix exists to
+// stop sharing - two different people using this machine, each hitting a
+// signed-out moment, would read/write each other's notes. A distinct,
+// never-migrated-into anonymous path keeps that case isolated too.
+const ANONYMOUS_MEETINGS_FILE_PATH = path.join(app.getPath('userData'), 'meetings-anonymous.json');
 
 function meetingsFilePathForScope(scopeId) {
   return scopeId
     ? path.join(app.getPath('userData'), `meetings-${scopeId}.json`)
-    : LEGACY_MEETINGS_FILE_PATH;
+    : ANONYMOUS_MEETINGS_FILE_PATH;
 }
 
 // One-time migration: the first signed-in user after this change ships
 // inherits the pre-existing shared file (better than silently losing it),
 // then the legacy file is renamed so no OTHER user who signs in later can
 // read it. Runs at most once per machine (guarded by the legacy file's
-// existence - it's gone after the first migration).
+// existence - it's gone after the first migration). Never runs for the
+// anonymous path - a signed-out session should never inherit the old
+// shared file's data either.
+// CodeRabbit finding: getMeetingsFilePath() runs on every meetings read/
+// write, and this did 2-3 synchronous fs.existsSync() calls on every one of
+// those even long after migration has already happened (or never will for
+// this scope). Once resolved for a scopedPath, never worth re-checking.
+const migrationCheckedScopes = new Set();
+
 function migrateLegacyMeetingsFileIfNeeded(scopedPath) {
-  if (scopedPath === LEGACY_MEETINGS_FILE_PATH) return;
+  if (scopedPath === LEGACY_MEETINGS_FILE_PATH || scopedPath === ANONYMOUS_MEETINGS_FILE_PATH) return;
+  if (migrationCheckedScopes.has(scopedPath)) return;
+  migrationCheckedScopes.add(scopedPath);
   if (fs.existsSync(scopedPath)) return;
   if (!fs.existsSync(LEGACY_MEETINGS_FILE_PATH)) return;
   try {
@@ -1395,11 +1412,31 @@ ipcMain.handle('deleteMeeting', async (event, meetingId) => {
 });
 
 ipcMain.handle('searchSalesforce', async (_event, query) => {
-  return controlPlaneClient.searchSalesforce(query || '');
+  try {
+    return await controlPlaneClient.searchSalesforce(String(query || ''));
+  } catch (error) {
+    console.error('searchSalesforce failed:', error.message);
+    return { status: 'error', message: 'Salesforce search failed' };
+  }
 });
 
-ipcMain.handle('getMeetingSummaryStatus', async (_event, notesSessionId) => {
-  return controlPlaneClient.fetchMeetingSummary(notesSessionId);
+ipcMain.handle('getMeetingSummaryStatus', async (_event, meetingId) => {
+  try {
+    // CodeRabbit finding: this used to trust a renderer-supplied
+    // notesSessionId directly, unlike every sibling handler
+    // (linkMeetingRecords/confirmUploadMeeting/discardMeeting), which all
+    // resolve it from the local meeting record instead of taking the
+    // caller's word for it.
+    const data = await fileOperationManager.readMeetingsData();
+    const meeting = data.pastMeetings.find((m) => m.id === meetingId);
+    if (!meeting?.notesSessionId) {
+      return { status: 'error', message: 'No notes session for this meeting' };
+    }
+    return await controlPlaneClient.fetchMeetingSummary(meeting.notesSessionId);
+  } catch (error) {
+    console.error('getMeetingSummaryStatus failed:', error.message);
+    return { status: 'error', message: 'Could not fetch summary status' };
+  }
 });
 
 ipcMain.handle('linkMeetingRecords', async (_event, meetingId, linkedRecords) => {
@@ -1421,7 +1458,10 @@ ipcMain.handle('linkMeetingRecords', async (_event, meetingId, linkedRecords) =>
     });
     return { success: true, result: res.result };
   } catch (error) {
-    return { success: false, error: error.message };
+    // CodeRabbit finding: error.message could carry raw upstream detail
+    // (URLs, control-plane internals) - log it, return a sanitized message.
+    console.error('linkMeetingRecords failed:', error);
+    return { success: false, error: 'Could not link Salesforce records' };
   }
 });
 
@@ -1431,6 +1471,15 @@ ipcMain.handle('confirmUploadMeeting', async (_event, meetingId) => {
     const meeting = data.pastMeetings.find((m) => m.id === meetingId);
     if (!meeting?.notesSessionId) {
       return { success: false, error: 'No notes session for this meeting' };
+    }
+    // CodeRabbit finding: no guard against a repeat submission - a second
+    // click (or a retried IPC call) before the first one's UI state settled
+    // would fire a second real Salesforce write. The server-side upload log
+    // (meeting_sf_uploads) is itself idempotent per-target, but that still
+    // means a second call re-runs the whole upload instead of being a cheap
+    // no-op.
+    if (meeting.sfUpload) {
+      return { success: true, result: meeting.sfUpload, alreadyUploaded: true };
     }
     const linked = meeting.linked_records || [];
     if (!linked.length && !(meeting.interviewId || meeting.interview_id)) {
@@ -1454,7 +1503,8 @@ ipcMain.handle('confirmUploadMeeting', async (_event, meetingId) => {
     });
     return { success: true, result: res.result };
   } catch (error) {
-    return { success: false, error: error.message };
+    console.error('confirmUploadMeeting failed:', error);
+    return { success: false, error: 'Could not upload to Salesforce' };
   }
 });
 
@@ -1480,9 +1530,20 @@ ipcMain.handle('discardMeeting', async (_event, meetingId) => {
       }
     }
     let recordingId = null;
+    // CodeRabbit finding: the already-uploaded guard above only checked the
+    // stale snapshot read at the top of this handler - a confirmUploadMeeting
+    // call that completes after that read but before this callback runs
+    // would still get spliced out here, discarding a meeting that's now
+    // actually uploaded. Re-check against currentData (fresh at write time).
+    let aborted = false;
     await fileOperationManager.scheduleOperation(async (currentData) => {
       const pastIdx = currentData.pastMeetings.findIndex((m) => m.id === meetingId);
       const upcomingIdx = currentData.upcomingMeetings.findIndex((m) => m.id === meetingId);
+      const fresh = pastIdx !== -1 ? currentData.pastMeetings[pastIdx] : currentData.upcomingMeetings[upcomingIdx];
+      if (fresh?.sfUpload) {
+        aborted = true;
+        return currentData;
+      }
       if (pastIdx !== -1) {
         recordingId = currentData.pastMeetings[pastIdx].recordingId;
         currentData.pastMeetings.splice(pastIdx, 1);
@@ -1493,9 +1554,13 @@ ipcMain.handle('discardMeeting', async (_event, meetingId) => {
       }
       return currentData;
     });
+    if (aborted) {
+      return { success: false, error: 'Already uploaded to Salesforce — cannot discard' };
+    }
     return { success: true, recordingId };
   } catch (error) {
-    return { success: false, error: error.message };
+    console.error('discardMeeting failed:', error);
+    return { success: false, error: 'Could not discard meeting' };
   }
 });
 
@@ -1720,11 +1785,16 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
       m.aiSummaryStatus = 'pending';
       m.hasSummary = false;
     });
-    mainWindow.webContents.send('summary-update', {
-      meetingId,
-      content: 'Writing notes…',
-      aiSummaryStatus: 'writing',
-    });
+    // CodeRabbit finding: unlike the streamProgress closure right below,
+    // this send wasn't guarded - calling webContents.send on a destroyed
+    // window throws.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('summary-update', {
+        meetingId,
+        content: 'Writing notes…',
+        aiSummaryStatus: 'writing',
+      });
+    }
 
     const streamProgress = (currentText) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1761,7 +1831,9 @@ ipcMain.handle('generateMeetingSummaryStreaming', async (event, meetingId) => {
     });
 
     console.log('Updated meeting with Gemini AI summary');
-    mainWindow.webContents.send('summary-generated', meetingId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('summary-generated', meetingId);
+    }
 
     return { success: true, summary: result.aiSummary, tldr: result.aiSummaryTldr };
   } catch (error) {
