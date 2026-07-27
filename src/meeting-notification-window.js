@@ -55,8 +55,12 @@ function ensureNotificationWindow() {
       webSecurity: true,
     },
   });
-  windowReadyPromise = new Promise((resolve) => {
-    notificationWindow.webContents.once('did-finish-load', resolve);
+  const win = notificationWindow;
+  windowReadyPromise = new Promise((resolve, reject) => {
+    win.webContents.once('did-finish-load', resolve);
+    win.webContents.once('did-fail-load', (_event, errorCode, errorDescription) => {
+      reject(new Error(`notification window failed to load: ${errorDescription} (${errorCode})`));
+    });
   });
   notificationWindow.loadURL(NOTIFICATION_WINDOW_WEBPACK_ENTRY);
   // 'screen-saver' level + visibleOnFullScreen: true is the researched
@@ -108,7 +112,18 @@ async function showMeetingNotification(meetingData) {
   // very first notification after app launch. Awaiting did-finish-load
   // (already resolved for a reused window - see ensureNotificationWindow)
   // closes that gap without affecting the reused-window path.
-  await windowReadyPromise;
+  try {
+    await windowReadyPromise;
+  } catch (error) {
+    console.error('meeting-notification-window: failed to load', error);
+    if (notificationWindow === win) {
+      notificationWindow = null;
+      windowReadyPromise = null;
+    }
+    if (!win.isDestroyed()) win.destroy();
+    return;
+  }
+  if (win.isDestroyed()) return;
   win.webContents.send('notification:meeting', meetingData);
   // showInactive(), never show() - the whole point is not stealing focus
   // from the meeting app the user is joining.

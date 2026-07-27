@@ -140,6 +140,34 @@ describe('meeting-notification-window', () => {
     expect(mockWindow.hide).toHaveBeenCalledTimes(1);
   });
 
+  it('destroys the window and returns without sending or showing when the load fails (CodeRabbit finding)', async () => {
+    const failingWindow = {
+      ...makeMockWindow(),
+      webContents: {
+        send: vi.fn(),
+        once: vi.fn((event, cb) => {
+          if (event === 'did-fail-load') Promise.resolve().then(() => cb({}, -2, 'net::ERR_FAILED'));
+        }),
+      },
+      destroy: vi.fn(),
+    };
+    mockWindow.isDestroyed.mockReturnValue(true);
+    electronMock.__setWindowImpl(() => failingWindow);
+
+    await showMeetingNotification({ meetingUrl: 'https://zoom.us/j/test-fail-load' });
+
+    expect(failingWindow.destroy).toHaveBeenCalledTimes(1);
+    expect(failingWindow.webContents.send).not.toHaveBeenCalled();
+    expect(failingWindow.showInactive).not.toHaveBeenCalled();
+
+    // A subsequent call must build a brand new window rather than reusing
+    // the failed (now-null) singleton or hanging on the rejected promise.
+    mockWindow = makeMockWindow();
+    electronMock.__setWindowImpl(() => mockWindow);
+    await showMeetingNotification({ meetingUrl: 'https://zoom.us/j/test-fail-load-retry' });
+    expect(mockWindow.showInactive).toHaveBeenCalledTimes(1);
+  });
+
   it('registerNotificationActionHandlers wires the resize channel to update the window height', async () => {
     registerNotificationActionHandlers({});
     await showMeetingNotification({ meetingUrl: 'https://zoom.us/j/test9' });

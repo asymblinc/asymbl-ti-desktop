@@ -190,9 +190,13 @@ async function runAction(action) {
 }
 
 startBtn.addEventListener('click', () => runAction('startCapture'));
-dismissBtn.addEventListener('click', (event) => {
+dismissBtn.addEventListener('click', async (event) => {
   event.stopPropagation(); // don't let it bubble to panel's mouseenter/expand handling
-  window.notificationAPI.dismiss();
+  try {
+    await window.notificationAPI.dismiss();
+  } catch (error) {
+    console.error('dismiss failed', error);
+  }
 });
 
 // Keyboard shortcuts (B/P/R/D) - active only while this panel is visible
