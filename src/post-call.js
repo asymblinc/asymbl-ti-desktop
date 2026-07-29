@@ -330,6 +330,34 @@ function renderTranscript(meeting) {
   });
 }
 
+// Plain-text renderings for Copy/Export - read from the same underlying
+// meeting fields the Summary/Transcript panes already render from, not from
+// the DOM, so formatting stays correct even if a pane hasn't rendered yet.
+function buildSummaryText(meeting) {
+  const lines = [];
+  if (meeting.title) lines.push(meeting.title);
+  const isRecruiter = Boolean(meeting.interviewId || meeting.interview_id);
+  lines.push(isRecruiter ? 'Recruiter-aware summary' : 'General summary');
+  lines.push('');
+  lines.push(meeting.aiSummaryTldr || meeting.aiSummary || 'No summary yet.');
+  (meeting.aiSummarySections || []).forEach((s) => {
+    lines.push('');
+    lines.push(s.label || '');
+    (s.items || []).forEach((item) => lines.push(`- ${item}`));
+  });
+  return lines.join('\n').trim();
+}
+
+function buildTranscriptText(meeting) {
+  const lines = meeting.transcript || [];
+  if (!lines.length) return 'No transcript segments yet.';
+  return lines.map((t) => `${t.speaker || 'Speaker'}: ${t.text || ''}`).join('\n');
+}
+
+function activeTabText(meeting) {
+  return activeTab === 'transcript' ? buildTranscriptText(meeting) : buildSummaryText(meeting);
+}
+
 function renderRail(meeting, unlinked) {
   const body = $('pcRailBody');
   if (!body) return;
@@ -439,6 +467,10 @@ function setTab(tab) {
   if ($('pcSections')) $('pcSections').style.display = tab === 'summary' ? '' : 'none';
   if ($('pcNotesPane')) $('pcNotesPane').style.display = tab === 'notes' ? '' : 'none';
   if ($('pcTranscriptPane')) $('pcTranscriptPane').style.display = tab === 'transcript' ? '' : 'none';
+  // Copy/export only make sense for Summary and Transcript - Notes already
+  // has its own editable/auto-save affordance.
+  if ($('pcCopy')) $('pcCopy').style.display = tab === 'notes' ? 'none' : '';
+  if ($('pcExport')) $('pcExport').style.display = tab === 'notes' ? 'none' : '';
   // post-call-notes-link.jsx: the rail swaps content per tab (Smart-attach
   // for Summary, provenance for Notes) - not just the main pane.
   if ($('pcRailFooterCaption')) $('pcRailFooterCaption').style.display = tab === 'notes' ? 'none' : '';
@@ -597,6 +629,39 @@ export function wirePostCallUi(hooks = {}) {
   $('pcTabSummary')?.addEventListener('click', () => setTab('summary'));
   $('pcTabNotes')?.addEventListener('click', () => setTab('notes'));
   $('pcTabTranscript')?.addEventListener('click', () => setTab('transcript'));
+
+  $('pcCopy')?.addEventListener('click', async () => {
+    if (!currentMeeting) return;
+    const btn = $('pcCopy');
+    const original = btn.textContent;
+    // Inline button-text feedback, not alert() - a blocking native dialog
+    // for a clipboard failure is worse than the failure itself (real gap
+    // found via testing, 2026-07-28: alert() froze the whole renderer).
+    try {
+      await navigator.clipboard.writeText(activeTabText(currentMeeting));
+      btn.textContent = 'Copied ✓';
+    } catch (e) {
+      btn.textContent = 'Could not copy';
+    }
+    setTimeout(() => {
+      btn.textContent = original;
+    }, 1500);
+  });
+
+  $('pcExport')?.addEventListener('click', () => {
+    if (!currentMeeting) return;
+    const isTranscript = activeTab === 'transcript';
+    const text = activeTabText(currentMeeting);
+    const safeTitle = (currentMeeting.title || 'meeting').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '');
+    const filename = `${safeTitle}-${isTranscript ? 'transcript' : 'summary'}.txt`;
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
 
   $('pcResummarize')?.addEventListener('click', async () => {
     if (!currentMeeting?.id) return;

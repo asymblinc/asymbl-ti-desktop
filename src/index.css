@@ -2320,7 +2320,13 @@ body {
   grid-template-columns: 1fr 340px;
 }
 .pc-main { overflow-y: auto; padding: 20px 28px 28px; }
-.pc-main.dimmed { opacity: 0.45; }
+/* An unlinked meeting no longer washes the entire summary/notes/transcript
+   pane out to 45% opacity (real bug found via user report, 2026-07-28) -
+   the "Not linked" chip (#pcChipUnlinked) and the link flyout are already
+   the real nudge; dimming the actual content on top of that just made a
+   freshly-generated summary look broken/grey on nearly every ordinary
+   capture, since link_status defaults to 'unlinked' until a real SF link
+   resolves (which most calls don't get pre-linked). */
 .pc-rail {
   border-left: 1px solid var(--paper-2);
   background: var(--paper-2);
