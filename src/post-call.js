@@ -7,6 +7,13 @@ let currentMeeting = null;
 let selectedLinks = [];
 let activeTab = 'summary';
 let uiHooks = {};
+// The signed-in user's SF instance host (e.g. https://foo.my.salesforce.com),
+// known only once a search response has returned it this session - lets
+// Smart-attach cards link straight to the real record. Session-lifetime
+// only, same as suppressedMeetingUrls elsewhere in this app; a meeting
+// linked in a past session just renders its card non-clickable until a
+// fresh search happens again.
+let sfInstanceUrl = null;
 
 // tokens.css chip tones per SF object type - shared by the Smart-attach
 // rail (renderRail) and the flyout search results (runSearch).
@@ -122,6 +129,22 @@ export function openPostCallView(meeting) {
   selectedLinks = Array.isArray(meeting.linked_records) ? [...meeting.linked_records] : [];
   const view = $('postCallView');
   if (!view) return;
+  // Prime the SF host from bootstrap (via getAuthStatus) so already-linked
+  // record cards are clickable the moment this view opens - without this,
+  // sfInstanceUrl was only ever populated by an /sf/search response, so a
+  // meeting linked in an earlier session rendered a dead card until the
+  // user happened to search again.
+  if (!sfInstanceUrl) {
+    window.electronAPI
+      .getAuthStatus()
+      .then((s) => {
+        if (s?.sfInstanceUrl && !sfInstanceUrl) {
+          sfInstanceUrl = s.sfInstanceUrl;
+          if (isPostCallOpen() && currentMeeting) renderRail(currentMeeting, isUnlinked(currentMeeting));
+        }
+      })
+      .catch(() => {});
+  }
   view.classList.add('is-open');
   view.style.display = 'flex';
   if ($('editorView')) $('editorView').style.display = 'none';
@@ -149,7 +172,6 @@ export function openPostCallView(meeting) {
   const unlinked = isUnlinked(meeting);
 
   $('pcChipUnlinked').style.display = unlinked && meeting.link_status !== 'kept_internal' ? 'inline-flex' : 'none';
-  $('pcMain').classList.toggle('dimmed', unlinked && meeting.link_status !== 'kept_internal' && meeting.link_status !== 'decide_later');
   $('pcFlyout').style.display =
     unlinked && meeting.link_status !== 'kept_internal' && meeting.link_status !== 'decide_later' ? 'block' : 'none';
   // post-call-notes-link.jsx's Unlinked variant also uses the 340px rail.
@@ -358,6 +380,23 @@ function activeTabText(meeting) {
   return activeTab === 'transcript' ? buildTranscriptText(meeting) : buildSummaryText(meeting);
 }
 
+// Transient "Copied ✓"/"Exported ✓" confirmation on a button. Keyed per
+// button so two clicks in quick succession don't let the first click's
+// reset timer wipe the second click's confirmation (noticed during
+// verification, 2026-07-29).
+const labelResetTimers = new WeakMap();
+function flashButtonLabel(btn, message, restoreTo) {
+  if (!btn) return;
+  clearTimeout(labelResetTimers.get(btn));
+  btn.textContent = message;
+  labelResetTimers.set(
+    btn,
+    setTimeout(() => {
+      btn.textContent = restoreTo;
+    }, 1500)
+  );
+}
+
 function renderRail(meeting, unlinked) {
   const body = $('pcRailBody');
   if (!body) return;
@@ -391,7 +430,7 @@ function renderRail(meeting, unlinked) {
   // the mockup) only exists for records that came from an actual Smart-
   // attach search - an already-linked record has no such score to show, so
   // it's omitted rather than fabricated (same honesty rule as sf-search.ts).
-  const renderCandidateCard = (name, why, type, isPrimary) => {
+  const renderCandidateCard = (name, why, type, isPrimary, id) => {
     const card = document.createElement('div');
     card.className = 'pc-candidate' + (isPrimary ? ' primary' : '');
     if (isPrimary) {
@@ -415,17 +454,35 @@ function renderRail(meeting, unlinked) {
     whyEl.className = 'why';
     whyEl.textContent = why;
     card.appendChild(whyEl);
+    // Salesforce's plain ID-redirect URL works for any object type
+    // (standard or custom) - only clickable once a search this session has
+    // told us the signed-in user's real instance host (see sfInstanceUrl).
+    if (id && sfInstanceUrl) {
+      card.classList.add('clickable');
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.title = 'Open in Salesforce';
+      const open = () => window.electronAPI.openExternalUrl(`${sfInstanceUrl}/${id}`);
+      card.addEventListener('click', open);
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          open();
+        }
+      });
+    }
     return card;
   };
 
   let isFirst = true;
   if (meeting.interviewId || meeting.interview_id) {
-    body.appendChild(renderCandidateCard('Interview linked', meeting.interviewId || meeting.interview_id, 'Interview', isFirst));
+    const interviewId = meeting.interviewId || meeting.interview_id;
+    body.appendChild(renderCandidateCard('Interview linked', interviewId, 'Interview', isFirst, interviewId));
     isFirst = false;
   }
   records.forEach((r) => {
     if (r.type === 'Interview' && (r.id === meeting.interviewId || r.id === meeting.interview_id)) return;
-    body.appendChild(renderCandidateCard(r.name || r.id, `${r.type} · ${r.id}`, r.type, isFirst));
+    body.appendChild(renderCandidateCard(r.name || r.id, `${r.type} · ${r.id}`, r.type, isFirst, r.id));
     isFirst = false;
   });
 
@@ -496,6 +553,7 @@ async function runSearch(q) {
   box.innerHTML = '<div class="pc-meta" style="padding:8px 12px;">Searching Salesforce…</div>';
   const res = await window.electronAPI.searchSalesforce(q);
   box.innerHTML = '';
+  if (res.instanceUrl) sfInstanceUrl = res.instanceUrl;
   if (res.status !== 'success') {
     // Verified live (2026-07-25): this used to dump the raw error CODE
     // ("sf_reconnect_required") straight into the UI instead of a readable
@@ -525,10 +583,13 @@ async function runSearch(q) {
     box.appendChild(errBox);
     return;
   }
-  // Best match = highest-scored hit (results arrive pre-sorted by score,
-  // desc). "Also attach" below ~80 confidence starts unchecked - PLAN v2
-  // §7: "Also attach (default unchecked below threshold ~80%)".
-  const ATTACH_THRESHOLD = 80;
+  // Only the best match (highest-scored hit, results arrive pre-sorted by
+  // score desc) is pre-checked. Real bug found via user report, 2026-07-28:
+  // this used to also auto-check every OTHER result scoring >= 80 - fine
+  // when only the best match clears that bar, but a common first name (e.g.
+  // "Chris") can return several ~90%-confidence hits that all got silently
+  // pre-selected, attaching people the user never chose. "Also attach" is
+  // now opt-in only, regardless of score.
   const checked = new Set(res.results?.length ? [res.results[0]] : []);
 
   // Security audit (2026-07-25, Grok #8): this used to call
@@ -546,7 +607,6 @@ async function runSearch(q) {
       currentMeeting.linked_records = selectedLinks;
       if (selectedLinks.length) {
         $('pcChipUnlinked').style.display = 'none';
-        $('pcMain').classList.remove('dimmed');
         renderRail(currentMeeting, false);
       }
     }
@@ -560,7 +620,7 @@ async function runSearch(q) {
     row.className = 'pc-flyout-row' + (isBest ? ' selected' : '');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.checked = isBest || r.score >= ATTACH_THRESHOLD;
+    cb.checked = isBest;
     if (cb.checked) checked.add(r);
     cb.setAttribute('aria-label', `Attach ${r.name}`);
     row.appendChild(cb);
@@ -632,35 +692,30 @@ export function wirePostCallUi(hooks = {}) {
 
   $('pcCopy')?.addEventListener('click', async () => {
     if (!currentMeeting) return;
-    const btn = $('pcCopy');
-    const original = btn.textContent;
     // Inline button-text feedback, not alert() - a blocking native dialog
     // for a clipboard failure is worse than the failure itself (real gap
     // found via testing, 2026-07-28: alert() froze the whole renderer).
+    let message = 'Copied ✓';
     try {
       await navigator.clipboard.writeText(activeTabText(currentMeeting));
-      btn.textContent = 'Copied ✓';
     } catch (e) {
-      btn.textContent = 'Could not copy';
+      message = 'Could not copy';
     }
-    setTimeout(() => {
-      btn.textContent = original;
-    }, 1500);
+    flashButtonLabel($('pcCopy'), message, 'Copy');
   });
 
-  $('pcExport')?.addEventListener('click', () => {
+  $('pcExport')?.addEventListener('click', async () => {
     if (!currentMeeting) return;
     const isTranscript = activeTab === 'transcript';
-    const text = activeTabText(currentMeeting);
     const safeTitle = (currentMeeting.title || 'meeting').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '');
-    const filename = `${safeTitle}-${isTranscript ? 'transcript' : 'summary'}.txt`;
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    // Written by the main process (into ~/Downloads, then revealed in
+    // Finder), not a Blob/<a download> - see main.js's exportTextFile
+    // handler for why the browser trick doesn't finalize the file here.
+    const res = await window.electronAPI.exportTextFile({
+      filename: `${safeTitle}-${isTranscript ? 'transcript' : 'summary'}.txt`,
+      content: activeTabText(currentMeeting),
+    });
+    flashButtonLabel($('pcExport'), res?.success ? 'Saved to Downloads ✓' : 'Export failed', 'Export');
   });
 
   $('pcResummarize')?.addEventListener('click', async () => {
@@ -758,7 +813,6 @@ export function wirePostCallUi(hooks = {}) {
     }
     $('pcFlyout').style.display = 'none';
     $('pcChipUnlinked').style.display = 'none';
-    $('pcMain').classList.remove('dimmed');
     $('pcRailSub').textContent = 'Kept internal — will not sync to Salesforce.';
   });
 

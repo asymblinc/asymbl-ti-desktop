@@ -2420,6 +2420,10 @@ body {
   margin-bottom: 10px;
 }
 .pc-candidate.primary { background: var(--paper); border: 1.5px solid var(--accent); }
+/* Only applied when a real Salesforce link can be built (see post-call.js's
+   renderCandidateCard) - a non-clickable card stays cursor:default. */
+.pc-candidate.clickable { cursor: pointer; }
+.pc-candidate.clickable:hover { border-color: var(--accent); }
 .pc-candidate-badge {
   position: absolute;
   top: -8px;

@@ -183,7 +183,7 @@ async function searchSalesforce(query) {
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 15000,
     });
-    return { status: 'success', results: response.data.results || [] };
+    return { status: 'success', results: response.data.results || [], instanceUrl: response.data.instanceUrl || null };
   } catch (error) {
     return { status: 'error', message: sanitizedErrorMessage(error), code: error.response?.status };
   }

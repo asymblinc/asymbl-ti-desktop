@@ -2,7 +2,7 @@ require('dotenv').config();
 // F10-R10: must run before other requires so startup crashes are captured too.
 require('./crash-reporter').initCrashReporter();
 
-const { app, BrowserWindow, ipcMain, protocol, Notification, globalShortcut, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, Notification, globalShortcut, systemPreferences, shell } = require('electron');
 // electron-forge start (dev mode) runs the actual node_modules/electron
 // binary, whose bundle identity is baked in as "Electron" before any of our
 // code runs - the Dock hover-tooltip name comes from that, not from the
@@ -25,6 +25,7 @@ const tray = require('./tray');
 const meetingNotificationWindow = require('./meeting-notification-window');
 
 let cachedTenantId = null; // set once fetchBootstrap succeeds (Spec B F10-R9's telemetry events carry tenant_id)
+let cachedSfInstanceUrl = null; // same source: the SF org host, for Screen 08's "open in Salesforce" record links
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -200,7 +201,7 @@ app.whenReady().then(() => {
     // every login by control-plane (sf-oauth.ts), persisted here, falls
     // back to null (renderer shows initials) if the SF user has none set.
     const photoDataUri = authStore.getPhotoDataUri();
-    return { signedIn, email, photoDataUri, orgId, orgName, orgIsSandbox };
+    return { signedIn, email, photoDataUri, orgId, orgName, orgIsSandbox, sfInstanceUrl: cachedSfInstanceUrl };
   });
   ipcMain.handle('signOut', async () => {
     // clearTokens() throws if it couldn't delete the on-disk refresh-token
@@ -236,6 +237,11 @@ app.whenReady().then(() => {
           return;
         }
         cachedTenantId = bootstrapResult.bootstrap.user.tenant_id;
+        // Screen 08's Smart-attach "open in Salesforce" links need the org's
+        // instance host. Sourced from bootstrap (the "first call after
+        // login") so a record card is clickable immediately, not only after
+        // an /sf/search call happens to return it.
+        cachedSfInstanceUrl = bootstrapResult.bootstrap.user.sf_instance_url ?? null;
         telemetry.initTelemetry(process.env.POSTHOG_API_KEY, bootstrapResult.bootstrap.tenant.features.telemetry_enabled);
       });
 
@@ -1417,6 +1423,56 @@ ipcMain.handle('deleteMeeting', async (event, meetingId) => {
   } catch (error) {
     console.error('Error deleting meeting:', error);
     return { success: false, error: error.message };
+  }
+});
+
+// Screen 08 Export. Writes straight to ~/Downloads from the main process;
+// the renderer confirms the destination in the button label.
+//
+// Three approaches were tried; the first two were rejected on evidence
+// (2026-07-29): (1) the renderer's Blob + <a download> trick downloads the
+// full contents but Electron never finalizes the filename, leaving an
+// unrenamed .com.github.Electron.* temp file behind; (2) dialog
+// .showSaveDialog works but adds a modal step to what should be a one-click
+// action (and on current macOS the panel is out-of-process, so it can't be
+// driven in automated verification either). Deliberately NOT calling
+// shell.showItemInFolder here: revealing pulls OS focus out of the app on
+// every single export, which is worse than just naming the destination.
+ipcMain.handle('exportTextFile', async (_event, payload) => {
+  try {
+    const content = String(payload?.content ?? '');
+    // Strip any path separators - the renderer supplies a display-derived
+    // name, so it must never be able to escape the downloads directory.
+    const base = String(payload?.filename || 'export.txt').replace(/[/\\]/g, '-');
+    const dir = app.getPath('downloads');
+    const ext = path.extname(base) || '.txt';
+    const stem = path.basename(base, ext);
+    let filePath = path.join(dir, `${stem}${ext}`);
+    for (let i = 2; fs.existsSync(filePath); i += 1) {
+      filePath = path.join(dir, `${stem} (${i})${ext}`);
+    }
+    fs.writeFileSync(filePath, content, 'utf8');
+    return { success: true, filePath, fileName: path.basename(filePath) };
+  } catch (error) {
+    console.error('exportTextFile failed:', error.code || error.name);
+    return { success: false, error: 'export_failed' };
+  }
+});
+
+// Screen 08 Smart-attach rail "open in Salesforce" link. Only ever opens a
+// real Salesforce domain in the OS default browser, never inside this app -
+// validated here (not just trusted from the renderer) since a URL this
+// broad shouldn't become a generic "open anything externally" primitive.
+ipcMain.handle('openExternalUrl', async (_event, url) => {
+  try {
+    const parsed = new URL(String(url || ''));
+    if (parsed.protocol !== 'https:' || !/\.(salesforce|force)\.com$/i.test(parsed.hostname)) {
+      return { success: false, error: 'invalid_url' };
+    }
+    await shell.openExternal(parsed.toString());
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: 'invalid_url' };
   }
 });
 

@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateMeetingSummary: (meetingId) => ipcRenderer.invoke('generateMeetingSummary', meetingId),
   generateMeetingSummaryStreaming: (meetingId) => ipcRenderer.invoke('generateMeetingSummaryStreaming', meetingId),
   searchSalesforce: (query) => ipcRenderer.invoke('searchSalesforce', query),
+  openExternalUrl: (url) => ipcRenderer.invoke('openExternalUrl', url),
+  exportTextFile: (payload) => ipcRenderer.invoke('exportTextFile', payload),
   getMeetingSummaryStatus: (meetingId) => ipcRenderer.invoke('getMeetingSummaryStatus', meetingId),
   linkMeetingRecords: (meetingId, linkedRecords) =>
     ipcRenderer.invoke('linkMeetingRecords', meetingId, linkedRecords),
