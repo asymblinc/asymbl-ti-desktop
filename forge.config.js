@@ -17,7 +17,7 @@ module.exports = {
         };
       }
     },
-    icon: './muesli',
+    icon: './asymbl',
     extendInfo: {
       NSUserNotificationAlertStyle: "alert",
     }
@@ -53,6 +53,7 @@ module.exports = {
       name: '@electron-forge/plugin-webpack',
       config: {
         devContentSecurityPolicy: "default-src * 'unsafe-inline' 'unsafe-eval' data: blob: filesystem: mediastream: file:;",
+        loggerPort: 9080, // 9000 is already bound system-wide (Tailscale) on this machine
         mainConfig: './webpack.main.config.js',
         renderer: {
           config: './webpack.renderer.config.js',
@@ -63,6 +64,32 @@ module.exports = {
               name: 'main_window',
               preload: {
                 js: './src/preload.js',
+              },
+            },
+            {
+              // Screen 01 (menu-bar tray popover) - a separate frameless
+              // BrowserWindow, not a native Tray context menu, since the
+              // design needs custom cards/gradients/buttons a native macOS
+              // menu can't render. Own preload - only exposes what the
+              // popover needs, not the full main-window electronAPI surface.
+              html: './src/popover.html',
+              js: './src/popover-renderer.js',
+              name: 'popover_window',
+              preload: {
+                js: './src/popover-preload.js',
+              },
+            },
+            {
+              // Screen 01b/01c (meeting-notification panel) - replaces the
+              // generic native Electron Notification shown on meeting-
+              // detected with the real designed pill/dropdown (task #37).
+              // Own preload, same pattern as popover_window - exposes only
+              // the 4 dropdown actions, nothing else.
+              html: './src/meeting-notification.html',
+              js: './src/meeting-notification-renderer.js',
+              name: 'notification_window',
+              preload: {
+                js: './src/meeting-notification-preload.js',
               },
             },
           ],

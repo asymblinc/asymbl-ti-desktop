@@ -7,6 +7,39 @@
  */
 
 import './index.css';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import {
+  openPostCallView,
+  closePostCallView,
+  wirePostCallUi,
+  shouldOpenPostCall,
+} from './post-call.js';
+
+marked.setOptions({ mangle: false, headerIds: false });
+
+// Renders #simple-editor's markdown content into the read-only preview pane
+// shown by default (real bug found via live use: the note view was a bare
+// textarea with no rendering at all, so raw #/** characters showed
+// literally). Keeps the existing textarea/autosave/streaming-update logic
+// completely untouched - this only adds a rendered view on top of it.
+function syncEditorPreview(content) {
+  const preview = document.getElementById('simple-editor-preview');
+  if (preview) {
+    // Content includes transcript-derived and (later) server-generated AI
+    // text, not just what the user typed - marked() doesn't sanitize
+    // embedded HTML, so sanitize before it ever reaches innerHTML.
+    preview.innerHTML = DOMPurify.sanitize(marked(content || ''));
+  }
+}
+
+function setEditorContent(value) {
+  const editorElement = document.getElementById('simple-editor');
+  if (editorElement) {
+    editorElement.value = value;
+  }
+  syncEditorPreview(value);
+}
 
 // Create empty meetings data structure to be filled from the file
 const meetingsData = {
@@ -17,6 +50,292 @@ const meetingsData = {
 // Create empty arrays that will be filled from file
 const upcomingMeetings = [];
 const pastMeetings = [];
+
+// Shared toast helper - was duplicated inline at 2 call sites already
+// (joinMeetingBtn's "no active meeting"/"error joining" cases); extracted
+// here rather than adding a 3rd copy for the sign-in error case.
+function showToast(message) {
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => {
+      toast.remove();
+    }, 300);
+  }, 3000);
+}
+
+// Human-readable messages for sign-in failure reasons - the raw error/
+// locked_reason strings from the OAuth callback were only ever
+// console.error'd before, never shown to the user (real gap found during
+// end-to-end testing, 2026-07-22).
+const SIGN_IN_ERROR_MESSAGES = {
+  license_inactive: {
+    package_not_installed: 'Your Salesforce org doesn’t have Recall installed. Contact your admin.',
+    license_not_assigned: 'You don’t have a Recall license assigned yet. Contact your admin.',
+    license_revoked: 'Your Recall license has been revoked. Contact your admin.',
+    sf_reconnect_required: 'Your Salesforce connection needs to be refreshed. Please sign in again.',
+  },
+  sf_oauth_failed: 'Salesforce sign-in failed. Please try again.',
+  timeout: 'Sign-in timed out. Please try again.',
+  missing_tokens: 'Salesforce sign-in failed. Please try again.',
+};
+
+function signInErrorMessage(error, lockedReason) {
+  const entry = SIGN_IN_ERROR_MESSAGES[error];
+  if (typeof entry === 'string') return entry;
+  if (entry && lockedReason && entry[lockedReason]) return entry[lockedReason];
+  return 'Sign-in failed. Please try again.';
+}
+
+// Shared between the header's small sign-in button and screen 00's gate CTA
+// (added 2026-07-23) - both call the same startLogin() IPC path, they only
+// differ in label. The gate button wraps its label in a span (it also has
+// an icon), the header button doesn't, so update whichever text target the
+// button actually has rather than assuming textContent is the whole button.
+function wireSignInButton(btn, defaultLabel) {
+  const labelEl = btn.querySelector('.auth-gate-btn-label') || btn;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    labelEl.textContent = 'Signing in...';
+    // try/finally (real gap found via code review, 2026-07-23): a rejected
+    // startLogin() promise used to leave the button permanently disabled
+    // showing "Signing in..." forever, with no error surfaced.
+    try {
+      const result = await window.electronAPI.startLogin();
+      if (result.status !== 'success') {
+        console.error('Sign-in failed:', result.error);
+        showToast(signInErrorMessage(result.error, result.lockedReason));
+        labelEl.textContent = defaultLabel;
+      }
+    } catch (error) {
+      console.error('Sign-in threw:', error);
+      showToast(signInErrorMessage());
+      labelEl.textContent = defaultLabel;
+    } finally {
+      btn.disabled = false;
+      await refreshAuthUi();
+    }
+  });
+}
+
+// Tracks sign-in state for gating recording actions - Record In-person
+// Meeting/Record Meeting should not be usable while signed out (real gap
+// found during end-to-end testing: these worked regardless of auth state).
+window.isSignedIn = false;
+
+// Spec B F2: toggles the header's sign-in button vs. avatar based on
+// whether we've ever completed SF login (getAuthStatus checks in-memory
+// access token OR the persisted refresh token, not full session validity -
+// an expired/revoked refresh token still shows "signed in" here until the
+// next real API call fails).
+async function refreshAuthUi() {
+  const signInBtn = document.getElementById('signInBtn');
+  const userAvatar = document.getElementById('userAvatar');
+  if (!signInBtn || !userAvatar) {
+    return;
+  }
+  const { signedIn, email, photoDataUri, orgId, orgName, orgIsSandbox } = await window.electronAPI.getAuthStatus();
+  window.isSignedIn = signedIn;
+  window.currentUserEmail = email || null;
+  if (typeof renderHomeConnection === 'function') {
+    renderHomeConnection();
+  }
+
+  // Screen 00: full-bleed gate replaces the whole app while signed out -
+  // except mid-recording, where auth dropping must never yank away the
+  // stop/status controls out from under an in-progress capture (CEO review
+  // finding, 2026-07-23). isSignedIn already reflects the persisted 7-day
+  // refresh token (auth-store.js), not just the in-memory access token, so
+  // an actively-used session doesn't flicker this on across restarts.
+  const authGateView = document.getElementById('authGateView');
+  const appContainer = document.querySelector('.app-container');
+  if (authGateView && appContainer) {
+    const shouldGate = !signedIn && !window.isRecording;
+    authGateView.style.display = shouldGate ? 'grid' : 'none';
+    appContainer.style.display = shouldGate ? 'none' : 'flex';
+    // debugPanel/debugPanelToggle are siblings of .app-container, not
+    // children - hiding the container alone left the gear icon floating
+    // over the gate (found via visual verification screenshot).
+    const debugPanel = document.getElementById('debugPanel');
+    const debugPanelToggle = document.getElementById('debugPanelToggle');
+    if (debugPanel) debugPanel.style.display = shouldGate ? 'none' : '';
+    if (debugPanelToggle) debugPanelToggle.style.display = shouldGate ? 'none' : '';
+    // @recallai/desktop-sdk injects its own floating widget button directly
+    // onto <body> (its host element is a zero-width block with an
+    // internally fixed-position button, so hiding .app-container doesn't
+    // touch it) - also found via visual verification screenshot. Nothing
+    // meeting-related is actionable behind the gate anyway (no home view
+    // to act on its signals), so hiding it is correct, not just cosmetic.
+    const recallWidgetRoot = document.getElementById('id-recall-widget-root');
+    if (recallWidgetRoot) recallWidgetRoot.style.display = shouldGate ? 'none' : '';
+  }
+
+  signInBtn.style.display = signedIn ? 'none' : 'block';
+  userAvatar.style.display = signedIn ? 'flex' : 'none';
+  const newNoteBtn = document.getElementById('newNoteBtn');
+  if (newNoteBtn) {
+    newNoteBtn.disabled = !signedIn;
+    newNoteBtn.title = signedIn ? '' : 'Sign in with Asymbl to record a meeting';
+  }
+  const joinMeetingBtn = document.getElementById('joinMeetingBtn');
+  if (joinMeetingBtn) {
+    // Re-evaluate against the last known detection state, not just
+    // "signed out" - onMeetingDetectionStatus only fires on a detection
+    // change, so if a meeting was already detected before sign-in
+    // completed, no new event arrives to re-enable the button. Real gap
+    // found during end-to-end testing 2026-07-22 (stayed greyed out after
+    // sign-in with an active Slack meeting already detected).
+    joinMeetingBtn.disabled = !window.meetingDetected || !signedIn;
+    joinMeetingBtn.title = signedIn ? '' : 'Sign in with Asymbl to record a meeting';
+  }
+  // Real SF profile photo when the user has one set (fetched fresh on
+  // every login, see control-plane's sf-oauth.ts); falls back to initials
+  // otherwise - not every SF user has a profile photo.
+  if (signedIn && photoDataUri) {
+    userAvatar.style.backgroundImage = `url(${photoDataUri})`;
+    userAvatar.style.backgroundSize = 'cover';
+    userAvatar.style.backgroundPosition = 'center';
+    userAvatar.textContent = '';
+    userAvatar.title = email || '';
+  } else if (signedIn && email) {
+    userAvatar.style.backgroundImage = '';
+    userAvatar.title = email;
+    userAvatar.textContent = email[0].toUpperCase();
+  } else {
+    userAvatar.style.backgroundImage = '';
+    userAvatar.removeAttribute('title');
+    userAvatar.textContent = '';
+  }
+  const userMenuEmail = document.getElementById('userMenuEmail');
+  if (userMenuEmail) {
+    userMenuEmail.textContent = signedIn && email ? email : '';
+  }
+  // orgName is best-effort (control-plane's fetchOrganizationName - most
+  // recruiter SF profiles lack "View Setup and Configuration" needed to read
+  // it, researched 2026-07-23) - shown when available, falls back to just
+  // the org ID (always present, no special permission needed) rather than
+  // hiding the whole row.
+  const userMenuOrg = document.getElementById('userMenuOrg');
+  if (userMenuOrg) {
+    if (signedIn && (orgName || orgId)) {
+      userMenuOrg.style.display = '';
+      userMenuOrg.innerHTML = '';
+      if (orgName) {
+        const nameRow = document.createElement('div');
+        nameRow.className = 'user-menu-org-name-row';
+        // Same cloud glyph as the sign-in screen's "Continue with Salesforce"
+        // button (auth-gate-btn-primary) - one Salesforce icon, reused, not
+        // a second one invented for this row.
+        nameRow.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="user-menu-org-icon"><path d="M2.5 9.5a2.5 2.5 0 0 1 4-2 3 3 0 0 1 5.5 1 2 2 0 0 1 .5 4H4.5a2 2 0 0 1-2-2.5z"/></svg>';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'user-menu-org-name';
+        nameEl.textContent = orgName;
+        nameRow.appendChild(nameEl);
+        if (orgIsSandbox) {
+          const badge = document.createElement('span');
+          badge.className = 'home-chip tone-amber';
+          badge.textContent = 'Sandbox';
+          nameRow.appendChild(badge);
+        }
+        userMenuOrg.appendChild(nameRow);
+      }
+      if (orgId) {
+        const idEl = document.createElement('div');
+        idEl.className = 'user-menu-org-id';
+        idEl.textContent = orgId;
+        userMenuOrg.appendChild(idEl);
+      }
+    } else {
+      userMenuOrg.style.display = 'none';
+      userMenuOrg.innerHTML = '';
+    }
+  }
+  if (!signedIn) {
+    document.getElementById('userMenu')?.classList.remove('open');
+  }
+  // Signing in via Salesforce already grants the calendar/Interview__c access
+  // that powers "Today's schedule" - there's no separate "connect calendar"
+  // step for SF, so this reflects sign-in state rather than a dead button
+  // (real gap found via user testing, 2026-07-23: button always read
+  // "Connect calendar" even for an already-connected SF account).
+  const calConnLabel = document.getElementById('calConnLabel');
+  const calConnDot = document.getElementById('calConnDot');
+  if (calConnLabel && calConnDot) {
+    calConnLabel.textContent = signedIn ? 'Salesforce · Connected' : 'Connect calendar';
+    calConnDot.classList.toggle('is-connected', signedIn);
+  }
+  if (!signedIn) {
+    document.getElementById('calConnMenu')?.classList.remove('open');
+  }
+}
+
+// Click-to-toggle dropdown on the signed-in avatar (Sign out is the only
+// action today - a real settings entry point doesn't exist yet, so this
+// menu isn't wired to one; that's future work, not dropped scope).
+document.getElementById('userAvatar')?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  document.getElementById('userMenu')?.classList.toggle('open');
+});
+
+document.getElementById('signOutBtn')?.addEventListener('click', async () => {
+  document.getElementById('userMenu')?.classList.remove('open');
+  await window.electronAPI.signOut();
+  await refreshAuthUi();
+});
+
+// Calendar-connection dropdown (only Salesforce is real today - Google/
+// Outlook rows are disabled placeholders for TODOS.md #21's future
+// multi-calendar work, shown so the plan is visible rather than hidden).
+document.getElementById('calConnTrigger')?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  document.getElementById('calConnMenu')?.classList.toggle('open');
+});
+
+document.addEventListener('click', (event) => {
+  const wrapper = document.getElementById('userMenuWrapper');
+  if (wrapper && !wrapper.contains(event.target)) {
+    document.getElementById('userMenu')?.classList.remove('open');
+  }
+  const calConnWrapper = document.getElementById('calConnWrapper');
+  if (calConnWrapper && !calConnWrapper.contains(event.target)) {
+    document.getElementById('calConnMenu')?.classList.remove('open');
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    document.getElementById('userMenu')?.classList.remove('open');
+    document.getElementById('calConnMenu')?.classList.remove('open');
+  }
+});
+
+// Pushed by the main process whenever tokens change (sign-in callback,
+// sign-out) - decoupled from whether a startLogin() promise is still
+// pending, which is what left the UI stuck signed-out before this fix.
+window.electronAPI.onAuthStatusChanged?.(() => {
+  refreshAuthUi();
+  // Real bug found live (2026-07-27), same race class as the
+  // refreshNextEvent/refreshTodaySchedule fix above: getMeetingsFilePath()
+  // (main.js) scopes the meetings file to the signed-in user's access
+  // token, which isn't live yet on a fresh launch until this exact event
+  // fires (persisted refresh token -> network refresh -> access token).
+  // The initial DOMContentLoaded load always lost that race and silently
+  // read the (empty) legacy unscoped file - "Recent captures" showed
+  // nothing despite real data on disk, only fixed by a manual reload.
+  loadMeetingsDataFromFile();
+});
+
+// Screen 01: tray's "Start an unscheduled call" reuses the exact same
+// createNewMeeting() the in-app "Record In-person Meeting" button already
+// calls (renderer.js:1871), rather than main.js duplicating that note-
+// creation logic - createNewMeeting is only defined in this file.
+window.electronAPI.onTriggerNewNote?.(() => {
+  createNewMeeting();
+});
 
 // Group past meetings by date
 let pastMeetingsByDate = {};
@@ -215,47 +534,46 @@ function debounce(func, wait) {
 
 
 // Function to create meeting card elements
+// Screen 02 (Home/Today §2.5) "Recent captures" meta line - "58m · Today
+// 11:00 AM" for today/yesterday (matches design), "45m · Fri, Apr 25"
+// further back. Real duration_s (persisted on finalize), not fabricated.
+function homeRecentMeta(meeting) {
+  const durText = typeof meeting.duration_s === 'number' ? `${Math.round(meeting.duration_s / 60)}m · ` : '';
+  const dateLabel = formatDateHeader(meeting.date);
+  const timeText = dateLabel === 'Today' || dateLabel === 'Yesterday'
+    ? ` ${new Date(meeting.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`
+    : '';
+  return `${durText}${dateLabel}${timeText}`;
+}
+
 function createMeetingCard(meeting) {
   const card = document.createElement('div');
   card.className = 'meeting-card';
   card.dataset.id = meeting.id;
 
-  let iconHtml = '';
+  const titleHtml = meeting.hasDemo
+    ? `<a class="meeting-demo-link">${meeting.title}</a>`
+    : meeting.title;
 
-  if (meeting.type === 'profile') {
-    iconHtml = `
-      <div class="profile-pic">
-        <img src="https://via.placeholder.com/40" alt="Profile">
-      </div>
-    `;
-  } else if (meeting.type === 'calendar') {
-    iconHtml = `
-      <div class="meeting-icon calendar">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M19 4H18V2H16V4H8V2H6V4H5C3.89 4 3.01 4.9 3.01 6L3 20C3 21.1 3.89 22 5 22H19C20.1 22 21 21.1 21 20V6C21 4.9 20.1 4 19 4ZM19 20H5V10H19V20ZM19 8H5V6H19V8ZM9 14H7V12H9V14ZM13 14H11V12H13V14ZM17 14H15V12H17V14ZM9 18H7V16H9V18ZM13 18H11V16H13V18ZM17 18H15V16H17V18Z" fill="#6947BD"/>
-        </svg>
-      </div>
-    `;
-  } else if (meeting.type === 'document') {
-    iconHtml = `
-      <div class="meeting-icon document">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M14 2H6C4.9 2 4.01 2.9 4.01 4L4 20C4 21.1 4.89 22 5.99 22H18C19.1 22 20 21.1 20 20V8L14 2ZM16 18H8V16H16V18ZM16 14H8V12H16V14ZM13 9V3.5L18.5 9H13Z" fill="#4CAF50"/>
-        </svg>
-      </div>
-    `;
-  }
+  // Screen 02 (Home/Today §2.5) sync-state chip - real duration_s (persisted
+  // on finalize) and real pending-sync state (notes-sync.js), same source
+  // this card already renders from, not a second data path.
+  const isPending = homePendingSyncIds.includes(meeting.id);
+  const syncChipHtml = isPending
+    ? '<span class="home-chip tone-amber">Local</span>'
+    : '<span class="home-chip tone-green">Synced</span>';
 
-  let subtitleHtml = meeting.hasDemo
-    ? `<div class="meeting-time"><a class="meeting-demo-link">${meeting.subtitle}</a></div>`
-    : `<div class="meeting-time">${meeting.subtitle}</div>`;
-
-  card.innerHTML = `
-    ${iconHtml}
+  // meeting.title is externally-influenced (calendar/window-title data) -
+  // sanitize the same way every other innerHTML assignment in this file
+  // does (markdown preview, transcript, home lists). Real gap found via
+  // code review, 2026-07-23: this was the one innerHTML site missing it.
+  card.innerHTML = DOMPurify.sanitize(`
+    <div class="home-avatar">${homeInitials(meeting.title)}</div>
     <div class="meeting-content">
-      <div class="meeting-title">${meeting.title}</div>
-      ${subtitleHtml}
+      <span class="meeting-title">${titleHtml}</span>
+      <span class="meeting-time">${homeRecentMeta(meeting)}</span>
     </div>
+    ${syncChipHtml}
     <div class="meeting-actions">
       <button class="delete-meeting-btn" data-id="${meeting.id}" title="Delete note">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -263,39 +581,69 @@ function createMeetingCard(meeting) {
         </svg>
       </button>
     </div>
-  `;
+  `);
 
   return card;
 }
 
 // Function to show home view
 function showHomeView() {
+  closePostCallView();
   document.getElementById('homeView').style.display = 'block';
   document.getElementById('editorView').style.display = 'none';
   document.getElementById('backButton').style.display = 'none';
   document.getElementById('newNoteBtn').style.display = 'block';
   document.getElementById('toggleSidebar').style.display = 'none';
+  if (typeof refreshHomeDashboard === 'function') {
+    refreshHomeDashboard();
+  }
 
-  // Show Record Meeting button and set its state based on meeting detection
+  // Show Record Meeting button and set its state based on meeting detection.
+  // Screen 02 pixel-fidelity pass: design's header shows exactly one CTA
+  // ("New capture") when idle - "Record Meeting" only appears once a
+  // meeting is actually detected, rather than always showing (disabled).
   const joinMeetingBtn = document.getElementById('joinMeetingBtn');
   if (joinMeetingBtn) {
-    // Always show the button
-    joinMeetingBtn.style.display = 'block';
+    joinMeetingBtn.style.display = window.meetingDetected ? 'block' : 'none';
     joinMeetingBtn.innerHTML = `Record ${window.meetingPlatform || "Meeting"}`;
 
-    // Enable/disable based on meeting detection
-    if (window.meetingDetected) {
-      joinMeetingBtn.disabled = false;
-    } else {
-      joinMeetingBtn.disabled = true;
-    }
+    // Enable/disable based on meeting detection AND sign-in state - matches
+    // refreshAuthUi()/onMeetingDetectionStatus's gating (real gap found via
+    // review: this path ignored isSignedIn, so navigating home while signed
+    // out with a meeting still detected re-enabled the button in the UI,
+    // even though main.js's join handler still refuses the actual join).
+    joinMeetingBtn.disabled = !window.meetingDetected || !window.isSignedIn;
   }
 }
 
 // Function to show editor view
-function showEditorView(meetingId) {
+function showEditorView(meetingId, { forceClassicEditor = false } = {}) {
   console.log(`Showing editor view for meeting ID: ${meetingId}`);
 
+  // Find the meeting in either upcoming or past meetings
+  let meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
+
+  if (!meeting) {
+    console.error(`Meeting not found: ${meetingId}`);
+    return;
+  }
+
+  // Screen 08 — finished captures open post-call (summary + link flyout)
+  if (!forceClassicEditor && shouldOpenPostCall(meeting)) {
+    closePostCallView();
+    document.getElementById('homeView').style.display = 'none';
+    document.getElementById('editorView').style.display = 'none';
+    document.getElementById('backButton').style.display = 'block';
+    document.getElementById('newNoteBtn').style.display = 'none';
+    document.getElementById('toggleSidebar').style.display = 'none';
+    const joinMeetingBtn = document.getElementById('joinMeetingBtn');
+    if (joinMeetingBtn) joinMeetingBtn.style.display = 'none';
+    currentEditingMeetingId = meetingId;
+    openPostCallView(meeting);
+    return;
+  }
+
+  closePostCallView();
   // Make the views visible/hidden
   document.getElementById('homeView').style.display = 'none';
   document.getElementById('editorView').style.display = 'block';
@@ -307,14 +655,6 @@ function showEditorView(meetingId) {
   const joinMeetingBtn = document.getElementById('joinMeetingBtn');
   if (joinMeetingBtn) {
     joinMeetingBtn.style.display = 'none';
-  }
-
-  // Find the meeting in either upcoming or past meetings
-  let meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-
-  if (!meeting) {
-    console.error(`Meeting not found: ${meetingId}`);
-    return;
   }
 
   // Set the current editing meeting ID
@@ -330,24 +670,35 @@ function showEditorView(meetingId) {
   const dateObj = new Date(meeting.date);
   document.getElementById('noteDate').textContent = formatDate(dateObj);
 
+  // Reset the live transcript panel to hidden per note switch, and load
+  // whatever transcript this meeting already has (if the panel gets opened)
+  const liveTranscriptPanel = document.getElementById('liveTranscriptPanel');
+  if (liveTranscriptPanel) {
+    liveTranscriptPanel.classList.add('hidden');
+  }
+  renderLiveTranscript(meeting.transcript);
+
   // Get the editor element
   const editorElement = document.getElementById('simple-editor');
 
   // Important: Reset the editor content completely
   if (editorElement) {
     editorElement.value = '';
+    syncEditorPreview('');
   }
 
   // Add a small delay to ensure the DOM has updated before setting content
   setTimeout(() => {
     if (meeting.content) {
       editorElement.value = meeting.content;
+      syncEditorPreview(meeting.content);
       console.log(`Loaded content for meeting: ${meetingId}, length: ${meeting.content.length} characters`);
     } else {
       // If content is missing, create template
       const now = new Date();
       const template = `# Meeting Title\n• ${meeting.title}\n\n# Meeting Date and Time\n• ${now.toLocaleString()}\n\n# Participants\n• \n\n# Description\n• \n\nChat with meeting transcript: `;
       editorElement.value = template;
+      syncEditorPreview(template);
 
       // Save this template to the meeting
       meeting.content = template;
@@ -549,6 +900,7 @@ async function createNewMeeting() {
   const editorElement = document.getElementById('simple-editor');
   if (editorElement) {
     editorElement.value = '';
+    syncEditorPreview('');
   }
 
   // Now show the editor view with the new meeting
@@ -590,23 +942,10 @@ async function createNewMeeting() {
   return id;
 }
 
-// Function to render meetings to the page
-function renderMeetings() {
-  // Clear previous content
-  const mainContent = document.querySelector('.main-content .content-container');
-  mainContent.innerHTML = '';
-
-  // Create all notes section (replaces both upcoming and date-grouped sections)
-  const notesSection = document.createElement('section');
-  notesSection.className = 'meetings-section';
-  notesSection.innerHTML = `
-    <h2 class="section-title">Notes</h2>
-    <div class="meetings-list" id="notes-list"></div>
-  `;
-  mainContent.appendChild(notesSection);
-
-  // Get the notes container
-  const notesContainer = notesSection.querySelector('#notes-list');
+// Populate the notes list container with meeting cards, optionally filtered by a
+// case-insensitive substring match against meeting.title
+function renderNotesInto(notesContainer, query) {
+  notesContainer.innerHTML = '';
 
   // Add all meetings to the notes section (both upcoming and past)
   const allMeetings = [...upcomingMeetings, ...pastMeetings];
@@ -616,12 +955,54 @@ function renderMeetings() {
     return new Date(b.date) - new Date(a.date);
   });
 
+  const normalizedQuery = (query || '').trim().toLowerCase();
+
   // Filter out calendar entries and add only document type meetings to the container
   allMeetings
     .filter(meeting => meeting.type !== 'calendar') // Skip calendar entries
+    .filter(meeting => !normalizedQuery || (meeting.title || '').toLowerCase().includes(normalizedQuery))
     .forEach(meeting => {
       notesContainer.appendChild(createMeetingCard(meeting));
     });
+}
+
+// Function to render meetings to the page
+function renderMeetings() {
+  // Clear previous content
+  const mainContent = document.querySelector('.main-content .content-container');
+  mainContent.innerHTML = '';
+
+  // Create all notes section (replaces both upcoming and date-grouped sections).
+  // Heading + "Library →" link: the Library screen (#27) doesn't exist yet,
+  // so this list IS the history surface (screen 02 spec §2.5) - no separate
+  // "Recent captures" preview duplicating the same data (feedback 2026-07-23:
+  // "notes is recent captures").
+  const notesSection = document.createElement('section');
+  notesSection.className = 'meetings-section';
+  notesSection.innerHTML = `
+    <div class="home-section-header" style="margin-top: 0;">
+      <h2 class="section-title" style="margin-bottom: 0;">Recent captures</h2>
+      <div class="home-section-rule"></div>
+      <span class="home-section-link" id="homeLibraryLink">Library →</span>
+    </div>
+    <div class="meetings-list" id="notes-list"></div>
+  `;
+  mainContent.appendChild(notesSection);
+
+  // Get the notes container
+  const notesContainer = notesSection.querySelector('#notes-list');
+
+  renderNotesInto(notesContainer, '');
+
+  // homeLibraryLink is rebuilt by this function on every reload - wire it
+  // here rather than once in DOMContentLoaded, since the element itself is
+  // recreated each time.
+  const libraryLink = notesSection.querySelector('#homeLibraryLink');
+  if (libraryLink) {
+    libraryLink.addEventListener('click', () => {
+      notesSection.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
 }
 
 // Load meetings data from file
@@ -681,13 +1062,331 @@ async function loadMeetingsDataFromFile() {
 
       console.log('Meetings data loaded from file');
 
-      // Re-render the meetings
-      renderMeetings();
+      // Re-render the meetings (refreshHomeDashboard also calls
+      // renderMeetings(), so its sync-state chips use fresh pending-sync data)
+      refreshHomeDashboard();
     } else {
       console.error('Failed to load meetings data from file:', result.error);
     }
   } catch (error) {
     console.error('Error loading meetings data from file:', error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Screen 02/02b - Home/Today dashboard (docs/screen-specs/02-home-today.md).
+// State + render functions. Data sources, per §12 of the spec: today's
+// schedule is real (SF Event via today-schedule-updated IPC), recent
+// captures/stats are real (local meetingsData), needs-attention is real for
+// only 2 of 5 queue types (waiting-to-sync, speaker-labels - the other 3 have
+// no backing data source anywhere in this app yet), connection status is
+// real (auth + mic permission; calendar is honestly never "connected").
+// ---------------------------------------------------------------------------
+let homeTodaySchedule = [];
+let homeLiveRecording = null; // { noteId, recordingId, startedAt, title } | null
+let homePendingSyncIds = [];
+let homeTickInterval = null;
+
+function homeInitials(name) {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
+}
+
+function homeFormatTime(iso) {
+  // Explicit hour12 - this app launches with --lang=en-GB, whose default
+  // toLocaleTimeString format is 24-hour ("14:30"), not the design's 12-hour
+  // "2:30 PM".
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function homeMinutesUntil(iso) {
+  return Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+}
+
+function renderHomeGreeting() {
+  const dateEl = document.getElementById('homeDate');
+  const greetEl = document.getElementById('homeGreeting');
+  if (!dateEl || !greetEl) return;
+
+  const now = new Date();
+  // Explicit "Weekday, Month Day" (design: "Tuesday, July 22") rather than
+  // toLocaleDateString's locale-dependent field order (en-GB, this app's
+  // launch locale, renders "Thursday, 23 July" instead).
+  const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  dateEl.textContent = `${WEEKDAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()}`;
+
+  const hour = now.getHours();
+  const timeGreeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const name = window.currentUserEmail ? window.currentUserEmail.split('@')[0] : 'there';
+  const count = homeTodaySchedule.length;
+  greetEl.textContent = count === 0
+    ? `${timeGreeting}, ${name}. Nothing scheduled — capture an unscheduled call anytime.`
+    : `${timeGreeting}, ${name}. ${count} conversation${count === 1 ? '' : 's'} today.`;
+}
+
+// Up-next hero (spec §2.3) + Today's schedule list (spec §2.4). Capture-mode
+// pill always reads "You capture" - the capture-policy pre-check service
+// that would distinguish "Bot joins"/"Both" doesn't exist in this build.
+function renderHomeSchedule() {
+  const heroEl = document.getElementById('homeHero');
+  const emptyEl = document.getElementById('homeEmptySchedule');
+  const listEl = document.getElementById('homeScheduleList');
+  if (!heroEl || !emptyEl || !listEl) return;
+
+  renderHomeGreeting();
+
+  emptyEl.style.display = homeTodaySchedule.length === 0 ? 'flex' : 'none';
+
+  const next = homeTodaySchedule[0];
+  const nextMins = next ? homeMinutesUntil(next.startTime) : null;
+  // Hero collapses while a recording is live (spec §3 - "you're in the
+  // meeting"), and only shows for a next meeting under 2h away.
+  if (!homeLiveRecording && next && nextMins >= 0 && nextMins < 120) {
+    heroEl.style.display = 'block';
+    document.getElementById('homeHeroKicker').textContent = `Up next · in ${nextMins} min`;
+    document.getElementById('homeHeroAvatar').textContent = homeInitials(next.whoName || next.subject);
+    document.getElementById('homeHeroTitle').textContent = next.subject;
+    document.getElementById('homeHeroSub').textContent =
+      [next.whoName, homeFormatTime(next.startTime), next.location].filter(Boolean).join(' · ');
+  } else {
+    heroEl.style.display = 'none';
+  }
+
+  listEl.innerHTML = DOMPurify.sanitize(homeTodaySchedule.map((evt) => {
+    const mins = homeMinutesUntil(evt.startTime);
+    const isLiveRow = homeLiveRecording && mins <= 0 && mins > -180;
+    const isCurrent = !homeLiveRecording && mins <= 0 && mins > -60;
+    const timeCell = isLiveRow
+      ? `<span class="home-schedule-live"><span class="recall-pulse"></span>LIVE</span>`
+      : `<span class="home-schedule-time${isCurrent ? ' is-current' : ''}">${homeFormatTime(evt.startTime)}</span>`;
+    return `
+      <div class="home-schedule-row">
+        ${timeCell}
+        <div class="home-avatar">${homeInitials(evt.whoName || evt.subject)}</div>
+        <div class="home-schedule-meta">
+          <div class="home-schedule-title">${evt.subject || 'Untitled event'}</div>
+          <div class="home-schedule-sub">${evt.whoName || 'No linked record'}</div>
+        </div>
+        <span class="home-schedule-dur">${evt.location || ''}</span>
+        <span class="home-mode-pill">You capture</span>
+      </div>
+    `;
+  }).join(''));
+}
+
+// Needs attention (spec §2.6) - only 2 of 5 queue types have a real data
+// source in this build (see file header comment + TODOS.md #11).
+const HOME_ATTENTION_ICONS = {
+  // upload (waiting to sync)
+  amber: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 11V3M8 3L4.5 6.5M8 3l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 11v1.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  // users (speakers need labels)
+  blue: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="5.5" cy="5" r="2" stroke="currentColor" stroke-width="1.4"/><circle cx="11" cy="5.5" r="1.6" stroke="currentColor" stroke-width="1.3"/><path d="M1.8 13c0-2.2 1.7-3.8 3.7-3.8s3.7 1.6 3.7 3.8M9.6 9.8c1.7.2 2.9 1.6 2.9 3.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+};
+
+// Needs attention (spec §2.6) - only 2 of 5 queue types have a real data
+// source in this build (see file header comment + TODOS.md #11). Each item
+// has a real click action, not a static row: retry sync now, or open the
+// note to review/relabel speakers.
+function renderHomeAttention() {
+  const listEl = document.getElementById('homeAttentionList');
+  if (!listEl) return;
+
+  const items = [];
+  if (homePendingSyncIds.length > 0) {
+    const first = pastMeetings.find((m) => m.id === homePendingSyncIds[0]);
+    items.push({
+      tone: 'amber',
+      title: homePendingSyncIds.length === 1 ? '1 capture waiting to sync' : `${homePendingSyncIds.length} captures waiting to sync`,
+      sub: first ? `${first.title} · stored locally · click to retry` : 'Stored locally · click to retry',
+      action: 'retry-sync',
+      meetingId: homePendingSyncIds[0],
+    });
+  }
+  const needsLabels = pastMeetings.filter((m) =>
+    (m.transcript || []).some((t) => t.speaker === 'Unknown Speaker' || /^Speaker \d+$/.test(t.speaker || ''))
+  );
+  if (needsLabels.length > 0) {
+    items.push({
+      tone: 'blue',
+      title: needsLabels.length === 1 ? 'Speakers need labels' : `${needsLabels.length} calls need speaker labels`,
+      sub: `${needsLabels[0].title} · click to review`,
+      action: 'open-note',
+      meetingId: needsLabels[0].id,
+    });
+  }
+
+  if (items.length === 0) {
+    listEl.innerHTML = `
+      <div class="home-all-clear">
+        <strong>All clear.</strong>&nbsp;Nothing needs your attention right now.
+      </div>
+    `;
+    return;
+  }
+
+  const toneBg = { amber: 'var(--brand-tint-yellow)', blue: 'var(--brand-tint-blue)' };
+  const toneFg = { amber: '#a36d00', blue: '#0273c4' };
+  listEl.innerHTML = DOMPurify.sanitize(items.map((item) => `
+    <div class="home-attention-item" data-action="${item.action}" data-meeting-id="${item.meetingId}">
+      <div class="home-attention-icon" style="background:${toneBg[item.tone]};color:${toneFg[item.tone]}">${HOME_ATTENTION_ICONS[item.tone]}</div>
+      <div style="flex: 1; min-width: 0;">
+        <div class="home-attention-title">${item.title}</div>
+        <div class="home-attention-sub">${item.sub}</div>
+      </div>
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="flex-shrink: 0;"><path d="M6 3l5 5-5 5" stroke="var(--brand-gray)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+  `).join(''));
+
+  listEl.querySelectorAll('.home-attention-item').forEach((row) => {
+    row.addEventListener('click', async () => {
+      const { action, meetingId } = row.dataset;
+      if (action === 'open-note') {
+        showEditorView(meetingId);
+      } else if (action === 'retry-sync') {
+        row.style.opacity = '0.6';
+        await window.electronAPI.retryNoteSync(meetingId);
+        refreshHomeDashboard();
+      }
+    });
+  });
+}
+
+// This week (spec §2.7) - captures + hours are real (local data); synced-to-SF
+// and signals-extracted are honestly unavailable (no tracking exists yet),
+// not fabricated numbers.
+function renderHomeStats() {
+  const gridEl = document.getElementById('homeStatsGrid');
+  if (!gridEl) return;
+
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const thisWeek = pastMeetings.filter((m) => new Date(m.date).getTime() >= weekAgo);
+  const totalSeconds = thisWeek.reduce((sum, m) => sum + (typeof m.duration_s === 'number' ? m.duration_s : 0), 0);
+
+  const stats = [
+    { n: String(thisWeek.length), l: 'captures' },
+    { n: `${(totalSeconds / 3600).toFixed(1)}h`, l: 'recorded' },
+    { n: '—', l: 'synced to SF' },
+    { n: '—', l: 'signals extracted' },
+  ];
+
+  gridEl.innerHTML = stats.map((s) => `
+    <div class="home-stat-card">
+      <div class="home-stat-num">${s.n}</div>
+      <div class="home-stat-label">${s.l}</div>
+    </div>
+  `).join('');
+}
+
+// Connection status (spec §2.8) - real SF-token + mic-permission checks.
+// Calendar is never "connected" (no Google/Outlook integration exists -
+// TODOS.md #13) - this correctly shows the degraded state per spec §4.2,
+// not a bug.
+async function renderHomeConnection() {
+  const cardEl = document.getElementById('homeConnectionCard');
+  if (!cardEl) return;
+
+  const micStatus = await window.electronAPI.getMicPermissionStatus();
+  const micOk = micStatus === 'granted';
+
+  if (!window.isSignedIn) {
+    cardEl.className = 'home-connection-card is-degraded';
+    cardEl.innerHTML = '<strong>Reconnect Salesforce.</strong>&nbsp;Captures keep working and will sync when you\'re back.';
+  } else if (!micOk) {
+    cardEl.className = 'home-connection-card is-degraded';
+    cardEl.innerHTML = '<strong>Microphone access needed.</strong>&nbsp;Grant mic permission in System Settings to capture audio.';
+  } else {
+    cardEl.className = 'home-connection-card';
+    // The empty-card's calendar-connection dropdown (#calConnMenu) now
+    // covers this same caveat clearly (Salesforce connected, Google/Outlook
+    // coming soon) - repeating it here read as a contradiction once that
+    // shipped ("Salesforce connected" right next to "calendar isn't
+    // connected"), found via user testing 2026-07-23.
+    cardEl.innerHTML = '<strong>Salesforce and mic connected.</strong>&nbsp;Nothing to do here.';
+  }
+}
+
+// 02b live-recording strip (spec §3).
+function renderHomeLiveStrip() {
+  const stripEl = document.getElementById('homeLiveStrip');
+  if (!stripEl) return;
+
+  stripEl.style.display = homeLiveRecording ? 'flex' : 'none';
+  if (homeLiveRecording) {
+    document.getElementById('homeLiveTitle').textContent = homeLiveRecording.title;
+    const meeting = pastMeetings.find((m) => m.id === homeLiveRecording.noteId);
+    document.getElementById('homeLiveSub').textContent = meeting?.participants?.length
+      ? `${meeting.participants.length} participants · capturing`
+      : 'capturing';
+  }
+}
+
+function homeTickLiveTimer() {
+  if (!homeLiveRecording) return;
+  const elapsed = Math.max(0, Math.round((Date.now() - homeLiveRecording.startedAt) / 1000));
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  const timerEl = document.getElementById('homeLiveTimer');
+  if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+}
+
+function renderHomeDashboard() {
+  renderHomeSchedule();
+  renderHomeAttention();
+  renderHomeStats();
+  renderHomeConnection();
+  renderHomeLiveStrip();
+}
+
+// Refreshes homePendingSyncIds (the one piece of Home's state not already
+// pushed via IPC or loaded with meetingsData) before rendering. Also
+// re-renders the notes list so its sync-state chips (createMeetingCard)
+// reflect the freshly-fetched pending state, not whatever was cached when
+// the list last rendered.
+async function refreshHomeDashboard() {
+  try {
+    homePendingSyncIds = await window.electronAPI.getPendingSyncMeetingIds();
+  } catch (error) {
+    homePendingSyncIds = [];
+  }
+  renderMeetings();
+  renderHomeDashboard();
+}
+
+// Real user-facing live transcript panel (task: give the transcript a
+// proper scrollable view instead of the 5-second toast or the dark
+// developer-only Debug panel). Same meeting.transcript data as
+// updateDebugTranscript, styled for the main app rather than the debug
+// panel's dark theme.
+function renderLiveTranscript(transcript) {
+  const content = document.getElementById('liveTranscriptContent');
+  if (!content) return;
+
+  const wasAtBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 5;
+
+  if (!transcript || transcript.length === 0) {
+    content.innerHTML = '<p class="live-transcript-placeholder">No transcript available yet</p>';
+    return;
+  }
+
+  // Transcript text is speech-recognition output, not user-typed markdown,
+  // but still not fully trusted - sanitize before it reaches innerHTML
+  // (same reasoning as the markdown preview's DOMPurify usage above).
+  content.innerHTML = DOMPurify.sanitize(transcript.map((entry) => {
+    const speakerClass = entry.speaker === 'You' ? 'speaker-you'
+      : entry.speaker === 'Them' ? 'speaker-them'
+      : 'speaker-unknown';
+    return `
+      <div class="live-transcript-entry">
+        <span class="live-transcript-speaker ${speakerClass}">${entry.speaker || 'Unknown Speaker'}:</span>
+        <span class="live-transcript-text">${entry.text}</span>
+      </div>
+    `;
+  }).join(''));
+
+  if (wasAtBottom) {
+    content.scrollTop = content.scrollHeight;
   }
 }
 
@@ -725,9 +1424,17 @@ function updateDebugTranscript(transcript) {
     const timestamp = new Date(entry.timestamp);
     const formattedTime = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+    // Distinct color per speaker (T19 spec, docs/PLAN-desktop-redesign.md) -
+    // "You" and "Them" are the only two real states on this path (T17:
+    // real diarization isn't available), "Unknown Speaker" is the neutral
+    // fallback when even is_host isn't present.
+    const speakerClass = entry.speaker === 'You' ? 'speaker-you'
+      : entry.speaker === 'Them' ? 'speaker-them'
+      : 'speaker-unknown';
+
     // Create HTML for this entry
     entryDiv.innerHTML = `
-      <div class="transcript-speaker">${entry.speaker || 'Unknown'}</div>
+      <div class="transcript-speaker ${speakerClass}">${entry.speaker || 'Unknown'}</div>
       <div class="transcript-text">${entry.text}</div>
       <div class="transcript-timestamp">${formattedTime}</div>
     `;
@@ -1226,21 +1933,168 @@ const sdkLogger = {
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('DOM content loaded, loading data from file...');
 
+  // A raw <img src="./assets/..."> path 404s against the webpack dev server -
+  // electron-forge's webpack plugin only rewrites asset URLs that are
+  // require()'d from JS, not ones referenced directly in static HTML.
+  const appLogo = document.getElementById('appLogo');
+  if (appLogo) {
+    appLogo.src = require('./assets/asymbl-icon.png');
+  }
+
+  // Click the rendered preview to switch to raw-markdown editing; blur the
+  // textarea to switch back to the rendered view. One-time listeners - both
+  // elements are static in index.html, unlike the per-meeting autosave
+  // handler in setupAutoSaveHandler().
+  const editorPreviewEl = document.getElementById('simple-editor-preview');
+  const editorTextareaEl = document.getElementById('simple-editor');
+  if (editorPreviewEl && editorTextareaEl) {
+    const enterEditMode = () => {
+      editorPreviewEl.style.display = 'none';
+      editorTextareaEl.style.display = 'block';
+      editorTextareaEl.focus();
+    };
+    editorPreviewEl.addEventListener('click', enterEditMode);
+    // Accessibility gap found via CodeRabbit review: the preview was only
+    // mouse-operable despite being made tabindex-focusable - Enter/Space
+    // now trigger the same edit-mode switch as a click.
+    editorPreviewEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        enterEditMode();
+      }
+    });
+    editorTextareaEl.addEventListener('blur', () => {
+      syncEditorPreview(editorTextareaEl.value);
+      editorTextareaEl.style.display = 'none';
+      editorPreviewEl.style.display = 'block';
+    });
+  }
+
+  // Live transcript panel toggle - one-time listeners, same pattern as
+  // the markdown preview toggle above.
+  const transcriptToggleBtn = document.getElementById('transcriptToggleBtn');
+  const closeLiveTranscriptBtn = document.getElementById('closeLiveTranscriptBtn');
+  const liveTranscriptPanelEl = document.getElementById('liveTranscriptPanel');
+  if (transcriptToggleBtn && liveTranscriptPanelEl) {
+    transcriptToggleBtn.addEventListener('click', () => {
+      liveTranscriptPanelEl.classList.toggle('hidden');
+    });
+  }
+  if (closeLiveTranscriptBtn && liveTranscriptPanelEl) {
+    closeLiveTranscriptBtn.addEventListener('click', () => {
+      liveTranscriptPanelEl.classList.add('hidden');
+    });
+  }
+
+  // Screen 08 post-call shell
+  wirePostCallUi({
+    onClose: () => showHomeView(),
+    onSaveNotes: (meetingId, content) => {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) {
+        m.content = content;
+        saveMeetingsData();
+      }
+    },
+    // saveMeetingsData() only persists title/content (see main.js's
+    // saveMeetingsData handler), so it silently dropped link_status and made
+    // "Keep internal"/"Decide later" no-ops across sessions. Goes through its
+    // own IPC handler now, which writes via updateMeetingById.
+    onPersistLinkStatus: async (meetingId, status) => {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) m.link_status = status;
+      const res = await window.electronAPI.setMeetingLinkStatus(meetingId, status);
+      if (!res?.success) {
+        console.error('Failed to persist link status:', res?.error);
+      }
+    },
+    onReloadMeeting: async (meetingId) => {
+      await loadMeetingsDataFromFile();
+      return [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId) || null;
+    },
+    onDiscarded: async () => {
+      await loadMeetingsDataFromFile();
+      showHomeView();
+    },
+    // Screen 08 backoff poll (Grok P1/P4) - persists the summary fields the
+    // read-only status poll picked up, same fields generateMeetingSummary's
+    // IPC handlers already write on the manual Re-summarize path.
+    onSummaryUpdated: (meetingId, updated) => {
+      const m = pastMeetings.find((x) => x.id === meetingId);
+      if (m) {
+        m.aiSummary = updated.aiSummary;
+        m.aiSummaryTldr = updated.aiSummaryTldr;
+        m.aiSummarySections = updated.aiSummarySections;
+        m.aiSummaryProvenance = updated.aiSummaryProvenance;
+        m.aiSummaryStatus = updated.aiSummaryStatus;
+        m.hasSummary = updated.hasSummary;
+        m.aiSummaryError = updated.aiSummaryError;
+        saveMeetingsData();
+      }
+    },
+  });
+
   // Initialize the SDK Logger
   sdkLogger.init();
 
   // Initialize the debug panel
   initDebugPanel();
 
-  // Try to load the latest data from file - this is the only data source
+  // Try to load the latest data from file - this is the only data source.
+  // loadMeetingsDataFromFile() and showHomeView() below each already call
+  // refreshHomeDashboard() (which also re-renders the notes list), so no
+  // separate renderMeetings()/refreshHomeDashboard() call is needed here.
   await loadMeetingsDataFromFile();
-
-  // Render meetings only after loading from file
   console.log('Data loaded, rendering meetings...');
-  renderMeetings();
 
   // Initially show home view
   showHomeView();
+
+  // Screen 02 (Home/Today) real SF Event schedule feed, pushed from main.js.
+  window.electronAPI.onTodayScheduleUpdated((schedule) => {
+    homeTodaySchedule = schedule || [];
+    renderHomeDashboard();
+  });
+
+  // Hero's Pre-Brief CTA: honestly-documented no-op, same pattern as the
+  // tray popover's openPreBrief (#22/#23 not built - no Pre-Brief window
+  // exists yet to route to).
+  const homeHeroCta = document.getElementById('homeHeroCta');
+  if (homeHeroCta) {
+    homeHeroCta.addEventListener('click', () => console.log('Pre-Brief not yet built (#22/#23)'));
+  }
+  const homeEmptyNewCaptureBtn = document.getElementById('homeEmptyNewCaptureBtn');
+  if (homeEmptyNewCaptureBtn) {
+    homeEmptyNewCaptureBtn.addEventListener('click', () => createNewMeeting());
+  }
+  // homeLibraryLink is wired inside renderMeetings() instead - that section
+  // (and the link) is rebuilt on every data reload, so a one-time listener
+  // here would go stale the first time the notes list re-renders.
+  const homeLiveOpenBtn = document.getElementById('homeLiveOpenBtn');
+  if (homeLiveOpenBtn) {
+    homeLiveOpenBtn.addEventListener('click', () => {
+      if (homeLiveRecording?.noteId) showEditorView(homeLiveRecording.noteId);
+    });
+  }
+  const homeLiveStopBtn = document.getElementById('homeLiveStopBtn');
+  if (homeLiveStopBtn) {
+    homeLiveStopBtn.addEventListener('click', async () => {
+      if (homeLiveRecording?.recordingId) {
+        await window.electronAPI.stopManualRecording(homeLiveRecording.recordingId);
+      }
+    });
+  }
+
+  // Spec B F2: SF SSO login state
+  await refreshAuthUi();
+  const signInBtn = document.getElementById('signInBtn');
+  if (signInBtn) {
+    wireSignInButton(signInBtn, 'Sign in with Asymbl');
+  }
+  const authGateSignInBtn = document.getElementById('authGateSignInBtn');
+  if (authGateSignInBtn) {
+    wireSignInButton(authGateSignInBtn, 'Continue with Salesforce');
+  }
 
   // Listen for meeting detection status updates
   window.electronAPI.onMeetingDetectionStatus((data) => {
@@ -1256,9 +2110,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       const inHomeView = document.getElementById('homeView').style.display !== 'none';
 
       if (inHomeView) {
-        // Always show the button, but enable/disable based on meeting detection
-        joinMeetingBtn.style.display = 'block';
-        joinMeetingBtn.disabled = !data.detected;
+        // Only shown once a meeting is actually detected (screen 02
+        // pixel-fidelity pass - design's header has exactly one CTA when
+        // idle); enable/disable still also depends on sign-in state -
+        // recording while signed out was a real gap (worked regardless of
+        // auth, found during end-to-end testing 2026-07-22).
+        joinMeetingBtn.style.display = data.detected ? 'block' : 'none';
+        joinMeetingBtn.disabled = !data.detected || !window.isSignedIn;
+        joinMeetingBtn.title = window.isSignedIn ? '' : 'Sign in with Asymbl to record a meeting';
         joinMeetingBtn.textContent = data.detected ? `Record ${data.platformName}` : 'Record meeting';
       }
     }
@@ -1303,19 +2162,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Listen for recording completed events
+  // Listen for recording completed events → Screen 08 post-call. Only acts
+  // when the user is already looking at this exact meeting (real bug found
+  // via CodeRabbit review: this used to unconditionally reassign
+  // currentEditingMeetingId and force-navigate to post-call, yanking the
+  // user out of whatever unrelated note or view they were on) - matches
+  // main.js's own stated intent for this event ("if the note is currently
+  // open, notify the renderer to refresh it").
   window.electronAPI.onRecordingCompleted((meetingId) => {
     console.log('Recording completed for meeting:', meetingId);
-    // If this note is currently being edited, reload its content
-    if (currentEditingMeetingId === meetingId) {
-      loadMeetingsDataFromFile().then(() => {
-        // Refresh the editor with the updated content
-        const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-        if (meeting) {
-          document.getElementById('simple-editor').value = meeting.content;
-        }
-      });
-    }
+    const wasEditingThisMeeting = currentEditingMeetingId === meetingId;
+    loadMeetingsDataFromFile().then(() => {
+      if (!wasEditingThisMeeting) return;
+      const meeting = [...upcomingMeetings, ...pastMeetings].find((m) => m.id === meetingId);
+      if (!meeting) return;
+      if (shouldOpenPostCall(meeting)) {
+        document.getElementById('homeView').style.display = 'none';
+        document.getElementById('editorView').style.display = 'none';
+        document.getElementById('backButton').style.display = 'block';
+        openPostCallView(meeting);
+        return;
+      }
+      const ed = document.getElementById('simple-editor');
+      if (ed) {
+        ed.value = meeting.content;
+        syncEditorPreview(meeting.content);
+      }
+    });
   });
 
   // Listen for video frame events
@@ -1395,6 +2268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           // Update the transcript area in the debug panel
           updateDebugTranscript(meeting.transcript);
+          renderLiveTranscript(meeting.transcript);
 
           // Show notification about new transcript if debug panel is closed
           const debugPanel = document.getElementById('debugPanel');
@@ -1404,23 +2278,44 @@ document.addEventListener('DOMContentLoaded', async () => {
               // Add pulse effect to show there's new content
               debugPanelToggle.classList.add('has-new-content');
 
-              // Create a mini notification if we're recording
+              // Show a mini notification if we're recording. Real bug found
+              // via live use: a new notification div was appended on every
+              // transcript chunk without removing the previous one, so fast
+              // chunks piled up at the same fixed position and rendered as
+              // illegible overlapping text. One at a time - reuse the same
+              // element and just update its content, matching the "single
+              // most-recent utterance" this notification is meant to show
+              // (the full scrollable history is the debug panel's Transcript
+              // section, not this transient toast).
               if (window.isRecording) {
-                const miniNotification = document.createElement('div');
-                miniNotification.className = 'debug-notification transcript-notification';
-                miniNotification.innerHTML = `
-                  <span class="debug-notification-speaker">${latestEntry.speaker || 'Unknown'}</span>:
-                  <span class="debug-notification-text">${latestEntry.text.slice(0, 40)}${latestEntry.text.length > 40 ? '...' : ''}</span>
-                `;
+                let miniNotification = document.getElementById('transcript-mini-notification');
+                if (!miniNotification) {
+                  miniNotification = document.createElement('div');
+                  miniNotification.id = 'transcript-mini-notification';
+                  miniNotification.className = 'debug-notification transcript-notification';
+                  document.body.appendChild(miniNotification);
+                }
+                miniNotification.classList.remove('fade-out');
+                // Real XSS gap found via CodeRabbit review: this used to
+                // interpolate transcript text (speech-recognition output,
+                // not fully trusted) directly into innerHTML. DOM
+                // construction + textContent instead, same as the other
+                // transcript renderers already fixed this session.
+                const excerptText = latestEntry.text.length > 40 ? `${latestEntry.text.slice(0, 40)}...` : latestEntry.text;
+                const speakerSpan = document.createElement('span');
+                speakerSpan.className = 'debug-notification-speaker';
+                speakerSpan.textContent = latestEntry.speaker || 'Unknown';
+                const textSpan = document.createElement('span');
+                textSpan.className = 'debug-notification-text';
+                textSpan.textContent = excerptText;
+                miniNotification.replaceChildren(speakerSpan, document.createTextNode(': '), textSpan);
 
-                // Add to document
-                document.body.appendChild(miniNotification);
-
-                // Remove after a short time
-                setTimeout(() => {
+                // Remove after a short time of no further updates
+                clearTimeout(window.__transcriptNotificationTimeout);
+                window.__transcriptNotificationTimeout = setTimeout(() => {
                   miniNotification.classList.add('fade-out');
                   setTimeout(() => {
-                    document.body.removeChild(miniNotification);
+                    miniNotification.remove();
                   }, 500);
                 }, 5000);
               }
@@ -1453,42 +2348,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Listen for summary generation events
-  window.electronAPI.onSummaryGenerated((meetingId) => {
-    console.log('Summary generated for meeting:', meetingId);
-
-    // If this note is currently being edited, refresh the content
-    if (currentEditingMeetingId === meetingId) {
-      loadMeetingsDataFromFile().then(() => {
-        const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-        if (meeting) {
-          // Update the editor with the new content containing the summary
-          document.getElementById('simple-editor').value = meeting.content;
-        }
-      });
-    }
-  });
-
-  // Listen for streaming summary updates
-  window.electronAPI.onSummaryUpdate((data) => {
-    const { meetingId, content, timestamp } = data;
-
-    // If this note is currently being edited, update the content immediately
-    if (currentEditingMeetingId === meetingId) {
-      // Get the editor element
-      const editorElement = document.getElementById('simple-editor');
-
-      // Update the editor with the latest streamed content
-      // Use requestAnimationFrame for smoother updates that don't block the main thread
-      requestAnimationFrame(() => {
-        editorElement.value = content;
-
-        // Force the editor to scroll to the bottom to follow the new text
-        // This creates a better experience of watching text appear
-        editorElement.scrollTop = editorElement.scrollHeight;
-      });
-    }
-  });
+  // Summary generated/streaming-update events are handled by
+  // wirePostCallUi's own onSummaryGenerated/onSummaryUpdate listeners
+  // (post-call.js) - real duplicate-DOM-write bug found via CodeRabbit
+  // review, 2026-07-27: this file used to ALSO subscribe to both channels
+  // directly, and since ipcRenderer.on() adds a listener rather than
+  // replacing one, every event fired both handlers. The classic-editor
+  // branch here was always a no-op by design ("leave My Notes alone"), and
+  // the post-call-open branch duplicated post-call.js's own handling but
+  // via a full openPostCallView() reopen instead of just updating the
+  // summary surface - removed entirely rather than kept as a second copy.
 
   // Add event listeners for buttons
   document.querySelector('.new-note-btn').addEventListener('click', async () => {
@@ -1578,9 +2447,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  const debouncedSearch = debounce((query) => {
+    const notesContainer = document.getElementById('notes-list');
+    if (notesContainer) {
+      renderNotesInto(notesContainer, query);
+    }
+  }, 150);
+
   document.querySelector('.search-input').addEventListener('input', (e) => {
-    console.log('Search query:', e.target.value);
-    // TODO: Implement search functionality
+    debouncedSearch(e.target.value);
   });
 
   // Add click event delegation for meeting cards and their actions
@@ -1811,6 +2686,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       const isActive = data.state === 'recording' || data.state === 'paused';
       updateRecordingButtonUI(isActive, isActive ? data.recordingId : null);
     }
+
+    // Screen 02b (Home while recording) - drives the live strip regardless
+    // of which note is currently open in the editor, since Home is browsable
+    // during an active capture (spec §3).
+    if (data.state === 'recording') {
+      homeLiveRecording = { noteId: data.noteId, recordingId: data.recordingId, startedAt: data.startedAt, title: data.title };
+      if (homeTickInterval) clearInterval(homeTickInterval);
+      homeTickInterval = setInterval(homeTickLiveTimer, 1000);
+      homeTickLiveTimer();
+    } else if (data.state === 'ended') {
+      homeLiveRecording = null;
+      if (homeTickInterval) {
+        clearInterval(homeTickInterval);
+        homeTickInterval = null;
+      }
+    }
+    renderHomeDashboard();
   });
 
   // Setup record/stop button toggle
@@ -1825,6 +2717,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       window.isRecording = !window.isRecording;
+      if (!window.isRecording) {
+        // Recording just ended - refreshAuthUi()'s gate guard keeps the
+        // sign-in wall hidden for the whole time isRecording is true (never
+        // yank stop/status controls out from under an active capture), so
+        // if auth actually dropped mid-recording, re-check now instead of
+        // leaving the gate hidden until some unrelated event triggers it.
+        refreshAuthUi();
+      }
 
       // Get the elements inside the button
       const recordIcon = recordButton.querySelector('.record-icon');
@@ -1865,7 +2765,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           } else {
             // If starting failed, revert UI
             console.error('Failed to start recording:', result.error);
-            alert('Failed to start recording: ' + result.error);
+            showToast('Failed to start recording: ' + result.error);
             window.isRecording = false;
             recordButton.classList.remove('recording');
             recordIcon.style.display = 'block';
@@ -2007,21 +2907,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-
-
-  // Listen for recording completed events
-  window.electronAPI.onRecordingCompleted((meetingId) => {
-    console.log('Recording completed for meeting:', meetingId);
-    if (currentEditingMeetingId === meetingId) {
-      // Reload the meeting data first
-      loadMeetingsDataFromFile().then(() => {
-        // Refresh the editor with the updated content
-        const meeting = [...upcomingMeetings, ...pastMeetings].find(m => m.id === meetingId);
-        if (meeting) {
-          document.getElementById('simple-editor').value = meeting.content;
-        }
-      });
-    }
-  });
 
 });

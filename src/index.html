@@ -2,12 +2,104 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Muesli - Debug Notes</title>
+    <title>Asymbl Recall</title>
   </head>
   <body>
+    <!-- Screen 00 (unauthenticated) - full-bleed gate shown/hidden by
+         refreshAuthUi() in renderer.js; replaces .app-container entirely
+         rather than overlaying it, since the point is to gate first-launch
+         and signed-out state, not float above the app chrome. -->
+    <div class="auth-gate" id="authGateView" style="display: none;">
+      <div class="auth-gate-hero">
+        <div class="auth-gate-blob auth-gate-blob-blue"></div>
+        <div class="auth-gate-blob auth-gate-blob-purple"></div>
+        <div class="auth-gate-wordmark">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M19.5 9.5V4.5H4.5v15h8" stroke="#038FF8" stroke-width="3.2" stroke-linecap="square" fill="none"/>
+            <circle cx="17" cy="16.5" r="4.6" fill="#ED2929"/>
+          </svg>
+          <span class="auth-gate-wordmark-name">Recall</span>
+          <span class="auth-gate-wordmark-by">by asymbl<span class="auth-gate-wordmark-dot">.</span></span>
+        </div>
+        <div class="auth-gate-hero-spacer"></div>
+        <div class="auth-gate-hero-content">
+          <div class="auth-gate-headline">Every conversation,<br>remembered where<br>it matters.</div>
+          <div class="auth-gate-subhead">Recall captures your calls, extracts what was actually said, and files it to the right record — interviews, deals, or team syncs.</div>
+          <div class="auth-gate-vignette">
+            <div class="auth-gate-vignette-header">
+              <span class="recall-pulse"></span>
+              <span class="auth-gate-vignette-label">Live · 12:41</span>
+            </div>
+            <div class="auth-gate-vignette-quote">"…I'd need at least <span class="auth-gate-highlight">$210k base</span> to consider moving, and I'm in <span class="auth-gate-highlight">two other processes</span>…"</div>
+            <div class="auth-gate-vignette-chips">
+              <span class="auth-gate-chip">Comp · $210k floor</span>
+              <span class="auth-gate-chip">Competing · 2 active</span>
+            </div>
+          </div>
+        </div>
+        <div class="auth-gate-hero-spacer"></div>
+        <div class="auth-gate-footer">SOC 2 · Your tenant, your data · Never trained on</div>
+      </div>
+
+      <div class="auth-gate-panel">
+        <div class="auth-gate-panel-inner">
+          <div class="auth-gate-title">Sign in</div>
+          <div class="auth-gate-panel-subhead">Use the account your team runs on. You'll approve access in your browser.</div>
+
+          <button class="auth-gate-btn-primary" id="authGateSignInBtn">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 9.5a2.5 2.5 0 0 1 4-2 3 3 0 0 1 5.5 1 2 2 0 0 1 .5 4H4.5a2 2 0 0 1-2-2.5z"/></svg>
+            <span class="auth-gate-btn-label">Continue with Salesforce</span>
+          </button>
+
+          <div class="auth-gate-divider">
+            <span class="auth-gate-divider-line"></span>
+            <span class="auth-gate-divider-label">What happens next</span>
+            <span class="auth-gate-divider-line"></span>
+          </div>
+
+          <div class="auth-gate-steps">
+            <div class="auth-gate-step">
+              <div class="auth-gate-step-icon">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#024a82" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.8 2.7 3.8 2.7 6S9.8 12.2 8 14c-1.8-1.8-2.7-3.8-2.7-6S6.2 3.8 8 2z"/></svg>
+              </div>
+              <div>
+                <div class="auth-gate-step-title">Your browser opens</div>
+                <div class="auth-gate-step-body">Sign in on your company's own login page — never in this app.</div>
+              </div>
+            </div>
+            <div class="auth-gate-step">
+              <div class="auth-gate-step-icon">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#024a82" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l5.5 2v5c0 3-2.5 5-5.5 6-3-1-5.5-3-5.5-6v-5z"/></svg>
+              </div>
+              <div>
+                <div class="auth-gate-step-title">You approve access</div>
+                <div class="auth-gate-step-body">Recall only reads interviews and records you can already see.</div>
+              </div>
+            </div>
+            <div class="auth-gate-step">
+              <div class="auth-gate-step-icon">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#024a82" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l3 3 7-7"/></svg>
+              </div>
+              <div>
+                <div class="auth-gate-step-title">You're in</div>
+                <div class="auth-gate-step-body">The app unlocks automatically when you return.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="auth-gate-panel-footer">No account? Recall is part of the <span class="auth-gate-link">Asymbl Recruiter Suite</span> — ask your admin.</div>
+        </div>
+      </div>
+    </div>
+
     <div class="app-container">
       <header class="header" id="drag-region">
         <div class="header-left">
+          <div class="app-brand">
+            <img id="appLogo" alt="" class="app-logo" />
+            <span class="app-brand-name">Recall</span>
+            <span class="app-brand-by">by asymbl<span class="app-brand-dot">.</span></span>
+          </div>
           <button class="btn back-btn" id="backButton" style="display: none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M20 11H7.83L13.42 5.41L12 4L4 12L12 20L13.41 18.59L7.83 13H20V11Z" fill="currentColor"/>
@@ -18,43 +110,230 @@
           <div class="search-container">
             <span class="search-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M15.5 14H14.71L14.43 13.73C15.41 12.59 16 11.11 16 9.5C16 5.91 13.09 3 9.5 3C5.91 3 3 5.91 3 9.5C3 13.09 5.91 16 9.5 16C11.11 16 12.59 15.41 13.73 14.43L14 14.71V15.5L19 20.49L20.49 19L15.5 14ZM9.5 14C7.01 14 5 11.99 5 9.5C5 7.01 7.01 5 9.5 5C11.99 5 14 7.01 14 9.5C14 11.99 11.99 14 9.5 14Z" fill="#666666"/>
+                <path d="M15.5 14H14.71L14.43 13.73C15.41 12.59 16 11.11 16 9.5C16 5.91 13.09 3 9.5 3C5.91 3 3 5.91 3 9.5C3 13.09 5.91 16 9.5 16C11.11 16 12.59 15.41 13.73 14.43L14 14.71V15.5L19 20.49L20.49 19L15.5 14ZM9.5 14C7.01 14 5 11.99 5 9.5C5 7.01 7.01 5 9.5 5C11.99 5 14 7.01 14 9.5C14 11.99 11.99 14 9.5 14Z" fill="currentColor"/>
               </svg>
             </span>
-            <input type="text" class="search-input" placeholder="Search notes">
+            <input type="text" class="search-input" placeholder="Search transcripts, candidates, accounts…">
+            <span class="search-kbd">⌘K</span>
           </div>
         </div>
         <div class="header-right">
-          <button class="btn new-note-btn" id="newNoteBtn">Record In-person Meeting</button>
+          <button class="btn new-note-btn" id="newNoteBtn">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            New capture
+          </button>
           <button class="btn join-meeting-btn" id="joinMeetingBtn">Record Meeting</button>
           <button id="toggleSidebar" class="btn toggle-sidebar-btn" style="display: none;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M3 18H21V16H3V18ZM3 13H21V11H3V13ZM3 6V8H21V6H3Z" fill="#666666"/>
+              <path d="M3 18H21V16H3V18ZM3 13H21V11H3V13ZM3 6V8H21V6H3Z" fill="currentColor"/>
             </svg>
           </button>
-          <div class="user-avatar">
-            <svg width="32" height="32" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="40" height="40" rx="20" fill="#f0f0f0"/>
-              <path d="M20 20C22.7614 20 25 17.7614 25 15C25 12.2386 22.7614 10 20 10C17.2386 10 15 12.2386 15 15C15 17.7614 17.2386 20 20 20Z" fill="#a0a0a0"/>
-              <path d="M12 31C12 26.0294 15.5817 22 20 22C24.4183 22 28 26.0294 28 31" stroke="#a0a0a0" stroke-width="4"/>
-            </svg>
+          <button class="btn sign-in-btn" id="signInBtn" style="display: none;">Sign in with Asymbl</button>
+          <div class="user-menu-wrapper" id="userMenuWrapper">
+            <div class="user-avatar" id="userAvatar" style="display: none;">
+              <svg width="32" height="32" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect width="40" height="40" rx="20" fill="#f0f0f0"/>
+                <path d="M20 20C22.7614 20 25 17.7614 25 15C25 12.2386 22.7614 10 20 10C17.2386 10 15 12.2386 15 15C15 17.7614 17.2386 20 20 20Z" fill="#a0a0a0"/>
+                <path d="M12 31C12 26.0294 15.5817 22 20 22C24.4183 22 28 26.0294 28 31" stroke="#a0a0a0" stroke-width="4"/>
+              </svg>
+            </div>
+            <div class="user-menu" id="userMenu">
+              <div class="user-menu-org" id="userMenuOrg" style="display: none;"></div>
+              <div class="user-menu-email" id="userMenuEmail"></div>
+              <button class="user-menu-item" id="signOutBtn">Sign out</button>
+            </div>
           </div>
         </div>
       </header>
 
-      <!-- Home Screen View -->
+      <!-- Home Screen View (screen 02 · Home/Today dashboard, docs/screen-specs/02-home-today.md) -->
       <div id="homeView">
-        <main class="main-content">
-          <div class="content-container">
-            <!-- Only showing notes section, calendar hidden -->
-            <section class="meetings-section">
-              <h2 class="section-title">Notes</h2>
-              <div class="meetings-list" id="notes-list">
-                <!-- Meeting cards will be inserted here by JavaScript -->
-              </div>
-            </section>
+        <!-- 02b: live-recording strip (spec §3) - hidden unless a recording is active -->
+        <div class="home-live-strip" id="homeLiveStrip" style="display: none;">
+          <span class="recall-pulse"></span>
+          <span class="home-live-timer mono" id="homeLiveTimer">00:00</span>
+          <span class="home-live-title" id="homeLiveTitle"></span>
+          <span class="home-live-sub" id="homeLiveSub"></span>
+          <div class="home-live-wave">
+            <span class="recall-wave-bar" style="height: 6px; animation-delay: 0s"></span>
+            <span class="recall-wave-bar" style="height: 13px; animation-delay: .12s"></span>
+            <span class="recall-wave-bar" style="height: 8px; animation-delay: .24s"></span>
+            <span class="recall-wave-bar" style="height: 14px; animation-delay: .36s"></span>
+            <span class="recall-wave-bar" style="height: 7px; animation-delay: .48s"></span>
           </div>
-        </main>
+          <div class="home-live-spacer"></div>
+          <button class="home-live-btn-open" id="homeLiveOpenBtn">Open capture</button>
+          <button class="home-live-btn-stop" id="homeLiveStopBtn">Stop &amp; save</button>
+        </div>
+
+        <div class="home-dashboard">
+          <div class="home-main">
+            <div class="home-date" id="homeDate"></div>
+            <div class="home-greeting" id="homeGreeting"></div>
+
+            <!-- Up-next hero (spec §2.3) - shown only when the next meeting is < 2h away -->
+            <div class="home-hero" id="homeHero" style="display: none;">
+              <div class="home-hero-top">
+                <span class="home-hero-kicker" id="homeHeroKicker"></span>
+                <span class="home-hero-mode">
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8 9.5a2.2 2.2 0 0 0 2.2-2.2V4.2a2.2 2.2 0 0 0-4.4 0v3.1A2.2 2.2 0 0 0 8 9.5z" fill="#fff"/><path d="M4.3 7.3a3.7 3.7 0 0 0 7.4 0M8 11v2.3" stroke="#fff" stroke-width="1.3" stroke-linecap="round"/></svg>
+                  You capture
+                </span>
+              </div>
+              <div class="home-hero-body">
+                <div class="home-avatar home-avatar-lg" id="homeHeroAvatar"></div>
+                <div class="home-hero-meta">
+                  <div class="home-hero-title" id="homeHeroTitle"></div>
+                  <div class="home-hero-sub" id="homeHeroSub"></div>
+                </div>
+                <button class="home-hero-cta" id="homeHeroCta">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.2 4 4 1.2-4 1.2L8 11.4l-1.2-4-4-1.2 4-1.2z" fill="#038FF8"/></svg>
+                  Open Pre-Brief
+                </button>
+              </div>
+            </div>
+
+            <!-- No calls today (spec §4.1) -->
+            <div class="home-empty-card" id="homeEmptySchedule" style="display: none;">
+              <div class="home-empty-card-text">Connect a calendar to see more of your day here.</div>
+              <button class="home-empty-card-btn" id="homeEmptyNewCaptureBtn">New capture</button>
+              <div class="cal-conn-wrapper" id="calConnWrapper">
+                <button class="home-empty-card-btn-ghost cal-conn-trigger" id="calConnTrigger">
+                  <span class="cal-conn-dot" id="calConnDot"></span>
+                  <span id="calConnLabel">Connect calendar</span>
+                </button>
+                <div class="cal-conn-menu" id="calConnMenu">
+                  <div class="cal-conn-row" id="calConnRowSf">
+                    <span class="cal-conn-dot"></span>
+                    <span class="cal-conn-name">Salesforce</span>
+                    <span class="cal-conn-state">Connected</span>
+                  </div>
+                  <div class="cal-conn-row cal-conn-row-disabled">
+                    <span class="cal-conn-name">Google Calendar</span>
+                    <span class="cal-conn-state">Coming soon</span>
+                  </div>
+                  <div class="cal-conn-row cal-conn-row-disabled">
+                    <span class="cal-conn-name">Outlook</span>
+                    <span class="cal-conn-state">Coming soon</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="home-section-header" style="margin-top: 0;">
+              <span class="home-section-label">Today's schedule</span>
+              <div class="home-section-rule"></div>
+              <span class="home-section-source" id="homeScheduleSource">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 6.5h12M5 1.5v2.5M11 1.5v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                Salesforce interviews
+              </span>
+            </div>
+            <div class="home-schedule-list" id="homeScheduleList"></div>
+
+            <!-- Recent captures (spec §2.5) - nested in the left column (not a
+                 grid-level sibling) so it flows immediately after the
+                 schedule regardless of how tall the right rail is; a CSS
+                 grid row is always as tall as its tallest column, so a
+                 sibling-after-the-grid placement left a dead-space gap here
+                 whenever the rail (attention + stats + connection card) was
+                 taller than a short schedule list (real bug, found by the
+                 owner testing with real data). The Library screen (#27)
+                 doesn't exist yet, so this full list IS the history surface
+                 for now - no separate preview list duplicating the same data. -->
+            <main class="main-content">
+              <div class="content-container">
+                <section class="meetings-section">
+                  <div class="home-section-header">
+                    <h2 class="section-title" style="margin-bottom: 0;">Recent captures</h2>
+                    <div class="home-section-rule"></div>
+                    <span class="home-section-link" id="homeLibraryLink">Library →</span>
+                  </div>
+                  <div class="meetings-list" id="notes-list">
+                    <!-- Meeting cards will be inserted here by JavaScript -->
+                  </div>
+                </section>
+              </div>
+            </main>
+          </div>
+
+          <!-- Right rail -->
+          <div class="home-rail">
+            <div class="home-rail-label" style="margin-top: 0;">Needs attention</div>
+            <div class="home-attention-list" id="homeAttentionList"></div>
+
+            <div class="home-rail-label">This week</div>
+            <div class="home-stats-grid" id="homeStatsGrid"></div>
+
+            <div class="home-connection-card" id="homeConnectionCard"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Screen 08 family — Post-call review (Summary / Notes / unlinked flyout) -->
+      <div id="postCallView" aria-label="Post-call review">
+        <div class="pc-topbar">
+          <span class="pc-chip pc-chip-green" id="pcChipCaptured">Captured</span>
+          <span class="pc-meta" id="pcDuration">—</span>
+          <span class="pc-chip pc-chip-amber" id="pcChipUnlinked" style="display:none;">Not linked</span>
+          <div style="flex:1"></div>
+          <div class="pc-tabs" role="tablist" aria-label="Post-call tabs">
+            <button type="button" class="pc-tab" role="tab" id="pcTabSummary" aria-selected="true" aria-controls="pcSummaryPane" data-tab="summary">Summary</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabNotes" aria-selected="false" aria-controls="pcNotesPane" data-tab="notes">Notes</button>
+            <button type="button" class="pc-tab" role="tab" id="pcTabTranscript" aria-selected="false" aria-controls="pcTranscriptPane" data-tab="transcript" title="Transcript tab design pending">Transcript</button>
+          </div>
+          <div style="flex:1"></div>
+          <button type="button" class="pc-btn-ghost" id="pcCopy" title="Copy to clipboard">Copy</button>
+          <button type="button" class="pc-btn-ghost" id="pcExport" title="Save as a file">Export</button>
+          <button type="button" class="pc-btn-ghost" id="pcResummarize">Re-summarize</button>
+          <button type="button" class="pc-btn-ghost pc-btn-destructive" id="pcDiscard">Discard</button>
+          <button type="button" class="pc-btn-ghost" id="pcClose">Close</button>
+        </div>
+        <div class="pc-body" id="pcBody">
+          <div class="pc-main" id="pcMain">
+            <div class="pc-title" id="pcTitle">Meeting</div>
+            <div class="pc-meta" id="pcSubMeta" style="margin-top:4px;"></div>
+            <div id="pcSummaryPane" role="tabpanel" aria-labelledby="pcTabSummary">
+              <div class="pc-tldr" id="pcTldrCard">
+                <div class="pc-tldr-label" id="pcTldrLabel">✦ Writing notes…</div>
+                <div class="pc-tldr-body" id="pcTldrBody">Summary will appear here (Gemini).</div>
+              </div>
+              <div class="pc-sections" id="pcSections"></div>
+            </div>
+            <div id="pcNotesPane" role="tabpanel" aria-labelledby="pcTabNotes" style="display:none;">
+              <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · only what you confirm is written to Salesforce</div>
+              <textarea id="pcNotesEditor" class="pc-notes-hand" style="width:100%;min-height:220px;border:1px solid var(--paper-edge);border-radius:10px;padding:12px;resize:vertical;"></textarea>
+            </div>
+            <div id="pcTranscriptPane" role="tabpanel" aria-labelledby="pcTabTranscript" style="display:none;"></div>
+          </div>
+          <div class="pc-rail" id="pcRail">
+            <div class="pc-rail-header">
+              <div class="pc-rail-title" id="pcRailTitle">Smart-attach</div>
+              <div class="pc-rail-sub" id="pcRailSub">Files this conversation under the right Salesforce records.</div>
+            </div>
+            <div class="pc-rail-body" id="pcRailBody"></div>
+            <div class="pc-rail-footer">
+              <button type="button" class="pc-btn-primary" id="pcConfirmUpload">Confirm &amp; upload to Salesforce</button>
+              <div class="pc-meta" id="pcRailFooterCaption" style="text-align:center;margin-top:6px;">Stays out of Salesforce until you confirm</div>
+            </div>
+          </div>
+        </div>
+        <div class="pc-flyout" id="pcFlyout" style="display:none;" role="dialog" aria-label="Link this call">
+          <div style="padding:14px 16px 10px;">
+            <div style="font-size:13.5px;font-weight:650;color:var(--ink);">Where does this call belong?</div>
+            <div style="font-size:11.5px;color:var(--ink-4);line-height:1.45;">Link it to Salesforce, keep it internal, or decide later.</div>
+          </div>
+          <div class="pc-flyout-search">
+            <input type="search" id="pcFlyoutSearch" placeholder="Search Salesforce…" aria-label="Search Salesforce" autocomplete="off" />
+          </div>
+          <div id="pcFlyoutResults" style="padding:0 4px 10px;max-height:240px;overflow-y:auto;"></div>
+          <div style="border-top:1px solid var(--paper-2);padding:8px 12px;">
+            <button type="button" class="pc-escape" id="pcCreateRecord" title="Create-record mini-form is a separate, not-yet-built slice">Create a new record from this call…</button>
+            <button type="button" class="pc-escape" id="pcKeepInternal">Keep internal — never syncs to Salesforce</button>
+          </div>
+          <div style="border-top:1px solid var(--paper-2);padding:8px 12px;text-align:right;">
+            <button type="button" class="pc-btn-ghost" id="pcFlyoutClose">Close</button>
+          </div>
+        </div>
       </div>
 
       <!-- Note Editor View -->
@@ -85,9 +364,20 @@
                   </svg>
                   Me
                 </span>
+                <button class="btn transcript-toggle-btn" id="transcriptToggleBtn" title="Show live transcript">Transcript</button>
               </div>
             </div>
-            <textarea id="simple-editor"># Meeting Title
+            <div id="liveTranscriptPanel" class="live-transcript-panel hidden">
+              <div class="live-transcript-header">
+                <span>Live Transcript</span>
+                <button class="live-transcript-close" id="closeLiveTranscriptBtn">&times;</button>
+              </div>
+              <div class="live-transcript-content" id="liveTranscriptContent">
+                <p class="live-transcript-placeholder">No transcript available yet</p>
+              </div>
+            </div>
+            <div id="simple-editor-preview" class="markdown-preview" title="Click to edit" tabindex="0" role="button" aria-label="Note content, click or press Enter to edit"></div>
+            <textarea id="simple-editor" style="display: none;"># Meeting Title
 • Paint shopping plan
 
 # Meeting Date and Time

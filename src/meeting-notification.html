@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Recall</title>
+  </head>
+  <body>
+    <div class="notif-panel" id="panel">
+      <div class="notif-pill">
+        <div class="notif-accent-bar"></div>
+        <div class="notif-avatar" id="avatar">?</div>
+        <div class="notif-meta">
+          <div class="notif-title" id="title"></div>
+          <div class="notif-subline" id="subline"></div>
+        </div>
+        <div class="notif-split-btn">
+          <button class="notif-start-btn" id="startBtn" data-kbd-hint="none">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 10.5a2.2 2.2 0 0 0 2.2-2.2V4.7a2.2 2.2 0 0 0-4.4 0v3.6A2.2 2.2 0 0 0 8 10.5z"/><path d="M4.7 8a3.3 3.3 0 0 0 6.6 0M8 11.7v2"/></svg>
+            <span id="startLabel">Start capture</span>
+          </button>
+          <button class="notif-chevron-btn" id="chevronBtn">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+        </div>
+        <button class="notif-dismiss-btn" id="dismissBtn" title="Dismiss">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+        </button>
+      </div>
+      <div class="notif-expand" id="expand" style="display: none;"></div>
+    </div>
+  </body>
+</html>

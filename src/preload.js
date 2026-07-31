@@ -16,9 +16,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   navigate: (page) => ipcRenderer.send('navigate', page),
   saveMeetingsData: (data) => ipcRenderer.invoke('saveMeetingsData', data),
   loadMeetingsData: () => ipcRenderer.invoke('loadMeetingsData'),
+  getPendingSyncMeetingIds: () => ipcRenderer.invoke('getPendingSyncMeetingIds'),
+  retryNoteSync: (meetingId) => ipcRenderer.invoke('retryNoteSync', meetingId),
+  getMicPermissionStatus: () => ipcRenderer.invoke('getMicPermissionStatus'),
   deleteMeeting: (meetingId) => ipcRenderer.invoke('deleteMeeting', meetingId),
   generateMeetingSummary: (meetingId) => ipcRenderer.invoke('generateMeetingSummary', meetingId),
   generateMeetingSummaryStreaming: (meetingId) => ipcRenderer.invoke('generateMeetingSummaryStreaming', meetingId),
+  searchSalesforce: (query) => ipcRenderer.invoke('searchSalesforce', query),
+  openExternalUrl: (url) => ipcRenderer.invoke('openExternalUrl', url),
+  exportTextFile: (payload) => ipcRenderer.invoke('exportTextFile', payload),
+  getMeetingSummaryStatus: (meetingId) => ipcRenderer.invoke('getMeetingSummaryStatus', meetingId),
+  linkMeetingRecords: (meetingId, linkedRecords) =>
+    ipcRenderer.invoke('linkMeetingRecords', meetingId, linkedRecords),
+  setMeetingLinkStatus: (meetingId, linkStatus) =>
+    ipcRenderer.invoke('setMeetingLinkStatus', meetingId, linkStatus),
+  confirmUploadMeeting: (meetingId, selectedLinks) =>
+    ipcRenderer.invoke('confirmUploadMeeting', meetingId, selectedLinks),
+  discardMeeting: (meetingId) => ipcRenderer.invoke('discardMeeting', meetingId),
   startManualRecording: (meetingId) => ipcRenderer.invoke('startManualRecording', meetingId),
   stopManualRecording: (recordingId) => ipcRenderer.invoke('stopManualRecording', recordingId),
   debugGetHandlers: () => ipcRenderer.invoke('debugGetHandlers'),
@@ -34,5 +48,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onVideoFrame: (callback) => ipcRenderer.on('video-frame', (_, data) => callback(data)),
   onMeetingDetectionStatus: (callback) => ipcRenderer.on('meeting-detection-status', (_, data) => callback(data)),
   onMeetingTitleUpdated: (callback) => ipcRenderer.on('meeting-title-updated', (_, data) => callback(data)),
-  getActiveRecordingId: (noteId) => ipcRenderer.invoke('getActiveRecordingId', noteId)
+  getActiveRecordingId: (noteId) => ipcRenderer.invoke('getActiveRecordingId', noteId),
+  startLogin: () => ipcRenderer.invoke('startLogin'),
+  getAuthStatus: () => ipcRenderer.invoke('getAuthStatus'),
+  signOut: () => ipcRenderer.invoke('signOut'),
+  onAuthStatusChanged: (callback) => ipcRenderer.on('auth-status-changed', () => callback()),
+  onTriggerNewNote: (callback) => ipcRenderer.on('trigger-new-note', () => callback()),
+  onTodayScheduleUpdated: (callback) => ipcRenderer.on('today-schedule-updated', (_, schedule) => callback(schedule))
 });
