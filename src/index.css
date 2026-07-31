@@ -2214,11 +2214,11 @@ body {
   --accent-2: #0272c8;
   --accent-3: #d1eaff;
   --accent-ink: #024a82;
-  --green: #068a4f;
+  --green: #046b3d;
   --green-bg: #e5fff2;
-  --amber: #a36d00;
+  --amber: #7a5200;
   --amber-bg: #fff8e5;
-  --blue: #0273c4;
+  --blue: #024a82;
   --blue-bg: #d1eaff;
   --purple: #6d3fe0;
   --purple-bg: #f2ebff;
@@ -2296,7 +2296,9 @@ body {
   cursor: pointer;
 }
 .pc-btn-ghost.pc-btn-destructive {
-  color: var(--brand-record-red);
+  /* Text darkened to #c41616 (6.05:1); the brand red stays as the border and
+     the hover fill, so the destructive identity is unchanged. */
+  color: #c41616;
   border-color: var(--brand-record-red);
 }
 .pc-btn-ghost.pc-btn-destructive:hover {
@@ -2347,7 +2349,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
   margin-bottom: 8px;
 }
 .pc-tldr-body { font-size: 14px; line-height: 1.6; color: var(--ink-2); white-space: pre-wrap; }
@@ -2389,7 +2391,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--ink-5);
+  color: var(--ink-4);
   margin-bottom: 4px;
 }
 .pc-rail-sub { font-size: 12px; color: var(--ink-4); line-height: 1.45; }
@@ -2433,7 +2435,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: var(--accent);
+  background: var(--accent-ink);
   color: var(--paper);
   border-radius: 4px;
 }
@@ -2497,6 +2499,23 @@ body {
   margin: 0 8px;
 }
 .pc-flyout-row:hover, .pc-flyout-row.selected { background: var(--accent-3); }
+/* Replaces the 13x13 native checkbox: the whole 354x46 row is the control now
+   (it already had cursor:pointer and a hover background but no handler). */
+.pc-row-check {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--ink-5);
+  border-radius: 4px;
+  background: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--paper);
+}
+.pc-row-check.is-on { background: var(--accent-ink); border-color: var(--accent-ink); }
 .pc-escape {
   display: flex;
   align-items: center;
@@ -2513,10 +2532,10 @@ body {
   text-align: left;
 }
 .pc-escape:hover { background: var(--paper-2); }
-.pc-status-writing { color: var(--accent); font-size: 13px; }
+.pc-status-writing { color: var(--accent-ink); font-size: 13px; }
 .pc-section-label.tone-amber { background: var(--amber-bg); color: var(--amber); }
 .pc-section-label.tone-green { background: var(--green-bg); color: var(--green); }
-.pc-section-label.tone-accent { background: var(--accent-3, #eef2ff); color: var(--accent); }
+.pc-section-label.tone-accent { background: var(--accent-3, #eef2ff); color: var(--accent-ink); }
 .pc-provenance-card {
   background: var(--paper);
   border: 1px solid var(--paper-edge);
@@ -2538,7 +2557,7 @@ body {
   color: var(--ink-2);
   line-height: 1.35;
 }
-.pc-provenance-card .into span:first-child { color: var(--ink-5); font-size: 10px; }
+.pc-provenance-card .into span:first-child { color: var(--ink-4); font-size: 10px; }
 .pc-tx-row {
   display: grid;
   grid-template-columns: 88px 1fr;
@@ -2549,3 +2568,38 @@ body {
 }
 .pc-tx-speaker { font-weight: 600; color: var(--ink-3); }
 .pc-tx-text { color: var(--ink-2); line-height: 1.45; }
+
+/* Keyboard focus for the whole post-call surface. Before this the entire
+   2551-line stylesheet had 3 focus rules and NONE applied here - no element
+   on this screen carries class `btn`, and .pc-flyout-search input actively
+   removed the UA outline with no replacement. Worst case was renderCandidateCard
+   giving cards role="button" + tabindex="0" (announcing them as keyboard
+   targets) with no visible focus at all.
+   --accent-2 measured 4.95:1 on --paper and 4.58:1 on --paper-2, both clearing
+   the 3:1 non-text contrast requirement. */
+.pc-tab:focus-visible,
+.pc-btn-ghost:focus-visible,
+.pc-btn-primary:focus-visible,
+.pc-escape:focus-visible,
+.pc-find-another:focus-visible,
+.pc-candidate.clickable:focus-visible,
+.pc-flyout-row:focus-visible,
+.pc-notes-hand:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* The search field opts out of the shared ring (its wrapper already carries a
+   1.5px accent border) and instead darkens that border on focus, so the
+   affordance changes rather than doubling up. */
+.pc-flyout-search:has(input:focus-visible) {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 2px var(--accent-3);
+}
+
+/* Hover feedback. The five topbar ghost buttons and the primary CRM commit
+   button previously had no :hover at all - the most consequential button on
+   the screen was inert under the cursor. */
+.pc-btn-ghost:hover { background: var(--paper-2); border-color: var(--ink-5); }
+.pc-btn-primary:hover { background: var(--ink-2); }
+.pc-btn-primary:disabled:hover { background: var(--ink); }

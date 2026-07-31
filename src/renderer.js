@@ -1996,11 +1996,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         saveMeetingsData();
       }
     },
-    onPersistLinkStatus: (meetingId, status) => {
+    // saveMeetingsData() only persists title/content (see main.js's
+    // saveMeetingsData handler), so it silently dropped link_status and made
+    // "Keep internal"/"Decide later" no-ops across sessions. Goes through its
+    // own IPC handler now, which writes via updateMeetingById.
+    onPersistLinkStatus: async (meetingId, status) => {
       const m = pastMeetings.find((x) => x.id === meetingId);
-      if (m) {
-        m.link_status = status;
-        saveMeetingsData();
+      if (m) m.link_status = status;
+      const res = await window.electronAPI.setMeetingLinkStatus(meetingId, status);
+      if (!res?.success) {
+        console.error('Failed to persist link status:', res?.error);
       }
     },
     onReloadMeeting: async (meetingId) => {

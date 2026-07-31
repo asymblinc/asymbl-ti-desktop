@@ -1504,6 +1504,30 @@ ipcMain.handle('getMeetingSummaryStatus', async (_event, meetingId) => {
   }
 });
 
+// Screen 08's "Keep internal" / "Decide later" escape hatches. These used to
+// go through the renderer's saveMeetingsData(), which only copies `title` and
+// `content` onto the fresh disk record (see its scheduleOperation callback) -
+// so link_status was silently dropped on every save and both choices were
+// session-local no-ops. The amber "Not linked" chip and the auto-opening
+// flyout came back every session, re-asking a question the user had already
+// answered. Routed through updateMeetingById like every other real mutation.
+ipcMain.handle('setMeetingLinkStatus', async (_event, meetingId, linkStatus) => {
+  const ALLOWED = ['unlinked', 'linked', 'kept_internal', 'decide_later'];
+  if (!ALLOWED.includes(linkStatus)) {
+    return { success: false, error: 'invalid_link_status' };
+  }
+  try {
+    const found = await updateMeetingById(meetingId, (m) => {
+      m.link_status = linkStatus;
+    });
+    if (!found) return { success: false, error: 'Meeting not found' };
+    return { success: true };
+  } catch (error) {
+    console.error('setMeetingLinkStatus failed:', error);
+    return { success: false, error: 'Could not save link status' };
+  }
+});
+
 ipcMain.handle('linkMeetingRecords', async (_event, meetingId, linkedRecords) => {
   try {
     const data = await fileOperationManager.readMeetingsData();
@@ -1530,25 +1554,40 @@ ipcMain.handle('linkMeetingRecords', async (_event, meetingId, linkedRecords) =>
   }
 });
 
-ipcMain.handle('confirmUploadMeeting', async (_event, meetingId) => {
+ipcMain.handle('confirmUploadMeeting', async (_event, meetingId, selectedLinks) => {
   try {
     const data = await fileOperationManager.readMeetingsData();
     const meeting = data.pastMeetings.find((m) => m.id === meetingId);
     if (!meeting?.notesSessionId) {
       return { success: false, error: 'No notes session for this meeting' };
     }
-    // CodeRabbit finding: no guard against a repeat submission - a second
-    // click (or a retried IPC call) before the first one's UI state settled
-    // would fire a second real Salesforce write. The server-side upload log
-    // (meeting_sf_uploads) is itself idempotent per-target, but that still
-    // means a second call re-runs the whole upload instead of being a cheap
-    // no-op.
-    if (meeting.sfUpload) {
-      return { success: true, result: meeting.sfUpload, alreadyUploaded: true };
-    }
-    const linked = meeting.linked_records || [];
+    // /autoplan finding F5 (2026-07-30), live data loss: this used to blanket
+    // short-circuit whenever meeting.sfUpload existed, returning
+    // {success:true, alreadyUploaded:true} - which post-call.js renders as
+    // "Uploaded ✓". So attach Contact -> upload -> attach Job Applicant ->
+    // upload wrote NOTHING to Salesforce and showed a success tick. The guard
+    // was at the wrong layer: sf-confirm-upload.ts already skips targets
+    // already present in meeting_sf_uploads, so the server is idempotent
+    // per-target. Only skip when there is genuinely nothing NEW to send.
+    //
+    // selectedLinks comes from the renderer (autoplan C1) so that attaching
+    // and uploading is one action instead of requiring a separate "Done"
+    // click, whose omission previously produced 'Select a Salesforce record
+    // first' while the rail visibly showed the record attached. Falls back to
+    // the on-disk value when omitted, so an older caller still works.
+    const linked =
+      Array.isArray(selectedLinks) && selectedLinks.length
+        ? selectedLinks
+        : meeting.linked_records || [];
     if (!linked.length && !(meeting.interviewId || meeting.interview_id)) {
       return { success: false, error: 'Select a Salesforce record first' };
+    }
+    const alreadyUploadedIds = new Set(
+      (meeting.sfUpload?.uploaded || []).map((u) => u.id).filter(Boolean)
+    );
+    const pending = linked.filter((r) => !alreadyUploadedIds.has(r.id));
+    if (meeting.sfUpload && pending.length === 0) {
+      return { success: true, result: meeting.sfUpload, alreadyUploaded: true };
     }
     const records =
       linked.length > 0
@@ -1563,7 +1602,15 @@ ipcMain.handle('confirmUploadMeeting', async (_event, meetingId) => {
     await updateMeetingById(meetingId, (m) => {
       m.link_status = 'linked';
       m.linked_records = records;
-      m.sfUpload = res.result;
+      // Merge rather than replace: on a second attach-and-upload the new
+      // result only covers the newly-sent targets, so overwriting would drop
+      // the record of everything uploaded the first time (and would let F5
+      // re-fire). Dedupe by target id, newest wins.
+      const priorUploaded = m.sfUpload?.uploaded || [];
+      const newUploaded = res.result?.uploaded || [];
+      const byId = new Map(priorUploaded.map((u) => [u.id, u]));
+      for (const u of newUploaded) byId.set(u.id, u);
+      m.sfUpload = { ...(m.sfUpload || {}), ...res.result, uploaded: [...byId.values()] };
       if (res.result?.interview_id) m.interviewId = res.result.interview_id;
     });
     return { success: true, result: res.result };

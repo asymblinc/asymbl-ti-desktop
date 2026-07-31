@@ -172,12 +172,17 @@ export function openPostCallView(meeting) {
   const unlinked = isUnlinked(meeting);
 
   $('pcChipUnlinked').style.display = unlinked && meeting.link_status !== 'kept_internal' ? 'inline-flex' : 'none';
-  $('pcFlyout').style.display =
-    unlinked && meeting.link_status !== 'kept_internal' && meeting.link_status !== 'decide_later' ? 'block' : 'none';
+  // /autoplan C3: never auto-open. This used to slam the flyout over the
+  // summary the moment the view opened - often while that summary still read
+  // "Gemini is summarizing this conversation" - demanding a filing decision
+  // before delivering the thing the user came for. The "Not linked" chip and
+  // the rail's own CTA are the nudge now.
+  $('pcFlyout').style.display = 'none';
   // post-call-notes-link.jsx's Unlinked variant also uses the 340px rail.
   if ($('pcBody')) $('pcBody').classList.toggle('pc-body-wide-rail', unlinked);
 
   renderSummary(meeting);
+  refreshCommitButton();
   renderNotes(meeting);
   renderTranscript(meeting);
   renderRail(meeting, unlinked);
@@ -301,7 +306,12 @@ function renderProvenanceRail(meeting) {
 
   $('pcRailTitle').textContent = 'How your notes shaped the summary';
   $('pcRailSub').textContent = noteLineCount
-    ? `${items.length} of ${noteLineCount} notes were woven in. Private notes never leave this device.`
+    // Says "not in Salesforce", NOT "never leaves this device" - the latter
+    // was false (verified 2026-07-30): main.js's saveMeetingsData fires
+    // notesSync.syncNote on every save, POSTing the full note body to
+    // control-plane (notes-sync.js). The `private: true` flag it sends keeps
+    // the note out of Salesforce, which is a materially different promise.
+    ? `${items.length} of ${noteLineCount} notes were woven in. Private notes are never written to Salesforce.`
     : 'Summary was built from the transcript alone.';
 
   body.innerHTML = '';
@@ -378,6 +388,30 @@ function buildTranscriptText(meeting) {
 
 function activeTabText(meeting) {
   return activeTab === 'transcript' ? buildTranscriptText(meeting) : buildSummaryText(meeting);
+}
+
+/** Commit button state. Terminal ("Filed to Salesforce ✓", disabled) once
+ * everything currently selected has been uploaded; re-armed as soon as a
+ * not-yet-uploaded record is selected, so a second attach after an upload is
+ * still possible. */
+function refreshCommitButton() {
+  const btn = $('pcConfirmUpload');
+  if (!btn || !currentMeeting) return;
+  const uploadedIds = new Set(
+    (currentMeeting.sfUpload?.uploaded || []).map((u) => u.id).filter(Boolean)
+  );
+  const selected = currentMeeting.linked_records || [];
+  const pending = selected.filter((r) => !uploadedIds.has(r.id));
+  if (uploadedIds.size > 0 && pending.length === 0) {
+    btn.textContent = 'Filed to Salesforce ✓';
+    btn.disabled = true;
+  } else if (uploadedIds.size > 0) {
+    btn.textContent = `Upload ${pending.length} more to Salesforce`;
+    btn.disabled = false;
+  } else {
+    btn.textContent = 'Confirm & upload to Salesforce';
+    btn.disabled = false;
+  }
 }
 
 // Transient "Copied ✓"/"Exported ✓" confirmation on a button. Keyed per
@@ -590,40 +624,63 @@ async function runSearch(q) {
   // "Chris") can return several ~90%-confidence hits that all got silently
   // pre-selected, attaching people the user never chose. "Also attach" is
   // now opt-in only, regardless of score.
-  const checked = new Set(res.results?.length ? [res.results[0]] : []);
+  // /autoplan 2026-07-30: NOTHING is pre-selected. Previously the top hit was
+  // pre-checked and updateLocalSelection() was called unconditionally at the
+  // end of every search - so merely TYPING attached a record, hid the "Not
+  // linked" chip, and re-rendered the rail with a record the user never
+  // picked. Selection now requires an explicit click, every time.
+  // Seeded from whatever is already attached so re-searching doesn't appear
+  // to drop existing attachments.
+  // Seed from EVERYTHING already attached, not just what this search happens
+  // to return. Filtering to the current result set (as an earlier pass did)
+  // silently dropped a record attached under a previous query the moment the
+  // user searched for something else - so attaching Contact then searching
+  // for the Job Applicant lost the Contact.
+  const checked = new Set(currentMeeting?.linked_records || []);
 
-  // Security audit (2026-07-25, Grok #8): this used to call
-  // linkMeetingRecords on every keystroke/checkbox toggle - typing in the
-  // search box wrote link state to the server before the user confirmed
-  // anything. Selection is now purely local (updates in-memory state only)
-  // until the user explicitly clicks "Done" (see pcFlyoutDone below), which
-  // is the one place that actually persists it.
+  // Security audit (2026-07-25, Grok #8): selection stays purely local - it
+  // never writes link state SERVER-SIDE until the user explicitly commits via
+  // "Confirm & upload". That constraint is unchanged here; only the local UI
+  // state updates below.
   const updateLocalSelection = () => {
     selectedLinks = [...checked];
-    if (currentMeeting) {
-      currentMeeting.link_status = selectedLinks.length ? 'linked' : currentMeeting.link_status;
-      const interview = selectedLinks.find((r) => r.type === 'Interview');
-      if (interview) currentMeeting.interviewId = interview.id;
-      currentMeeting.linked_records = selectedLinks;
-      if (selectedLinks.length) {
-        $('pcChipUnlinked').style.display = 'none';
-        renderRail(currentMeeting, false);
-      }
-    }
+    if (!currentMeeting) return;
+    currentMeeting.linked_records = selectedLinks;
+    const interview = selectedLinks.find((r) => r.type === 'Interview');
+    // Symmetric: set AND clear. Previously interviewId was assigned but never
+    // cleared, so removing every record left stale renderer state that made
+    // the upload guard pass while disk was empty.
+    currentMeeting.interviewId = interview ? interview.id : null;
+    currentMeeting.link_status = selectedLinks.length ? 'linked' : 'unlinked';
+    // Symmetric: the empty branch used to be skipped entirely, leaving the
+    // rail showing a record that was no longer selected and the chip hidden.
+    $('pcChipUnlinked').style.display = selectedLinks.length ? 'none' : 'inline-flex';
+    renderRail(currentMeeting, selectedLinks.length === 0);
+    // The commit button goes terminal after a successful upload, but must
+    // come back the moment the user selects something NOT yet uploaded -
+    // otherwise the attach-a-second-record flow that F5 exists to fix would
+    // be blocked by the very UI that reports success.
+    refreshCommitButton();
   };
 
-  (res.results || []).forEach((r, i) => {
-    const isBest = i === 0;
+  (res.results || []).forEach((r) => {
     const row = document.createElement('div');
-    // post-call-notes-link.jsx: the top row gets an accent-3 background,
-    // not a text suffix - "selected" already carries that treatment.
-    row.className = 'pc-flyout-row' + (isBest ? ' selected' : '');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = isBest;
-    if (cb.checked) checked.add(r);
-    cb.setAttribute('aria-label', `Attach ${r.name}`);
-    row.appendChild(cb);
+    const isChecked = [...checked].some((c) => c.id === r.id);
+    row.className = 'pc-flyout-row' + (isChecked ? ' selected' : '');
+    // The whole row is the control. It already had cursor:pointer and a hover
+    // background but no handler - the only target was a 13x13 checkbox inside
+    // a 354x46 row. Multi-attach is preserved deliberately: the server writes
+    // one ContentNote per target, and Contact + Job Applicant on one call is a
+    // real recruiter journey.
+    row.setAttribute('role', 'checkbox');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-checked', isChecked ? 'true' : 'false');
+    row.setAttribute('aria-label', `Attach ${r.name}`);
+    const mark = document.createElement('span');
+    mark.className = 'pc-row-check' + (isChecked ? ' is-on' : '');
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = isChecked ? '✓' : '';
+    row.appendChild(mark);
     const chip = document.createElement('span');
     chip.className = `pc-chip pc-chip-${CHIP_TONE[r.type] || 'blue'}`;
     chip.textContent = r.type;
@@ -639,17 +696,29 @@ async function runSearch(q) {
     info.appendChild(name);
     info.appendChild(why);
     row.appendChild(info);
-    cb.onchange = () => {
-      if (cb.checked) checked.add(r);
-      else checked.delete(r);
+    const toggle = () => {
+      const on = [...checked].some((c) => c.id === r.id);
+      if (on) {
+        for (const c of [...checked]) if (c.id === r.id) checked.delete(c);
+      } else {
+        checked.add(r);
+      }
+      const nowOn = !on;
+      row.classList.toggle('selected', nowOn);
+      row.setAttribute('aria-checked', nowOn ? 'true' : 'false');
+      mark.classList.toggle('is-on', nowOn);
+      mark.textContent = nowOn ? '✓' : '';
       updateLocalSelection();
     };
+    row.addEventListener('click', toggle);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggle();
+      }
+    });
     box.appendChild(row);
   });
-
-  if (res.results?.length) {
-    updateLocalSelection();
-  }
 }
 
 export function wirePostCallUi(hooks = {}) {
@@ -765,28 +834,13 @@ export function wirePostCallUi(hooks = {}) {
     searchTimer = setTimeout(() => runSearch(e.target.value.trim()), 280);
   });
 
-  $('pcFlyoutDone')?.addEventListener('click', async () => {
-    // The one place selection actually persists server-side (Grok #8) -
-    // everything before this was local-only state.
-    if (currentMeeting?.id && selectedLinks.length) {
-      const btn = $('pcFlyoutDone');
-      btn.disabled = true;
-      // Real bug found via CodeRabbit review: neither a rejected promise nor
-      // a resolved-but-{success:false} result was checked, so the flyout
-      // closed as if the link had succeeded even when it hadn't.
-      try {
-        const res = await window.electronAPI.linkMeetingRecords(currentMeeting.id, selectedLinks);
-        if (!res?.success) {
-          alert(res?.error || 'Could not link these records');
-          return;
-        }
-      } catch (e) {
-        alert(e.message || 'Could not link these records');
-        return;
-      } finally {
-        btn.disabled = false;
-      }
-    }
+  // /autoplan C1: "Done" is gone. It looked like a dismiss button but was a
+  // mandatory save - confirmUploadMeeting read links from DISK while the
+  // renderer's guard read in-memory selectedLinks, so skipping Done produced
+  // "Select a Salesforce record first" while the rail visibly showed the
+  // record attached. confirmUploadMeeting now takes selectedLinks directly
+  // and does a strict superset of what linkMeetingRecords did.
+  $('pcFlyoutClose')?.addEventListener('click', () => {
     $('pcFlyout').style.display = 'none';
   });
   // Design review fix: Escape/click-outside must not implicitly trigger
@@ -801,7 +855,7 @@ export function wirePostCallUi(hooks = {}) {
   // §12, TODOS.md item 27's P4-2) - honest "not built yet" rather than a
   // silent no-op or a fake success.
   $('pcCreateRecord')?.addEventListener('click', () => {
-    alert('Creating a new Salesforce record from here is coming soon. Use Keep internal or Decide later for now.');
+    alert('Creating a new Salesforce record from here is coming soon. Use Keep internal for now, or close this and file it later.');
   });
 
   $('pcKeepInternal')?.addEventListener('click', () => {
@@ -816,15 +870,13 @@ export function wirePostCallUi(hooks = {}) {
     $('pcRailSub').textContent = 'Kept internal — will not sync to Salesforce.';
   });
 
-  $('pcDecideLater')?.addEventListener('click', () => {
-    if (currentMeeting) {
-      currentMeeting.link_status = 'decide_later';
-      if (typeof hooks.onPersistLinkStatus === 'function') {
-        hooks.onPersistLinkStatus(currentMeeting.id, 'decide_later');
-      }
-    }
-    $('pcFlyout').style.display = 'none';
-  });
+  // /autoplan C2: "Decide later" is gone. It cost a click to set a flag
+  // nothing read, and named an attention queue that has no unfiled row.
+  // Not filing IS deciding later - closing the search already means that.
+  // Persisted 'decide_later' values from older records are still accepted by
+  // main.js's setMeetingLinkStatus and render as unlinked (isUnlinked treats
+  // any non-'linked' status without records as unlinked), so old data is
+  // readable rather than orphaned.
 
   $('pcConfirmUpload')?.addEventListener('click', async () => {
     if (!currentMeeting?.id) return;
@@ -841,6 +893,7 @@ export function wirePostCallUi(hooks = {}) {
     if (!hasLink) {
       alert('Select a Salesforce record first (or Keep internal).');
       $('pcFlyout').style.display = 'block';
+      $('pcFlyoutSearch')?.focus();
       return;
     }
     btn.disabled = true;
@@ -850,16 +903,21 @@ export function wirePostCallUi(hooks = {}) {
       if ($('pcNotesEditor') && typeof hooks.onSaveNotes === 'function') {
         hooks.onSaveNotes(currentMeeting.id, $('pcNotesEditor').value);
       }
-      const res = await window.electronAPI.confirmUploadMeeting(currentMeeting.id);
+      // C1: hand the renderer's selection straight to the commit. This is the
+      // explicit user action that Grok #8 requires before anything is written
+      // server-side - nothing before this point touched the server.
+      const res = await window.electronAPI.confirmUploadMeeting(
+        currentMeeting.id,
+        selectedLinks.length ? selectedLinks : currentMeeting.linked_records || []
+      );
       if (res.success) {
         currentMeeting.sfUpload = res.result;
         currentMeeting.link_status = 'linked';
-        btn.textContent = 'Uploaded ✓';
+        // Terminal state, not a 2s flash that re-arms an action which can no
+        // longer do anything. Filing the call is the payoff of this screen.
+        $('pcChipUnlinked').style.display = 'none';
         renderRail(currentMeeting, false);
-        setTimeout(() => {
-          btn.textContent = 'Confirm & upload to Salesforce';
-          btn.disabled = false;
-        }, 2000);
+        refreshCommitButton();
       } else {
         alert(res.error || 'Upload failed');
         btn.textContent = 'Confirm & upload to Salesforce';

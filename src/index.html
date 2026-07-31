@@ -300,7 +300,7 @@
               <div class="pc-sections" id="pcSections"></div>
             </div>
             <div id="pcNotesPane" role="tabpanel" aria-labelledby="pcTabNotes" style="display:none;">
-              <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · notes stay yours, only shared blocks upload</div>
+              <div class="pc-meta" style="margin-bottom:8px;">Editable until you sync · only what you confirm is written to Salesforce</div>
               <textarea id="pcNotesEditor" class="pc-notes-hand" style="width:100%;min-height:220px;border:1px solid var(--paper-edge);border-radius:10px;padding:12px;resize:vertical;"></textarea>
             </div>
             <div id="pcTranscriptPane" role="tabpanel" aria-labelledby="pcTabTranscript" style="display:none;"></div>
@@ -313,7 +313,7 @@
             <div class="pc-rail-body" id="pcRailBody"></div>
             <div class="pc-rail-footer">
               <button type="button" class="pc-btn-primary" id="pcConfirmUpload">Confirm &amp; upload to Salesforce</button>
-              <div class="pc-meta" id="pcRailFooterCaption" style="text-align:center;margin-top:6px;">Stays local until you confirm</div>
+              <div class="pc-meta" id="pcRailFooterCaption" style="text-align:center;margin-top:6px;">Stays out of Salesforce until you confirm</div>
             </div>
           </div>
         </div>
@@ -329,10 +329,9 @@
           <div style="border-top:1px solid var(--paper-2);padding:8px 12px;">
             <button type="button" class="pc-escape" id="pcCreateRecord" title="Create-record mini-form is a separate, not-yet-built slice">Create a new record from this call…</button>
             <button type="button" class="pc-escape" id="pcKeepInternal">Keep internal — never syncs to Salesforce</button>
-            <button type="button" class="pc-escape" id="pcDecideLater">Decide later (stays in your attention queue)</button>
           </div>
           <div style="border-top:1px solid var(--paper-2);padding:8px 12px;text-align:right;">
-            <button type="button" class="pc-btn-ghost" id="pcFlyoutDone">Done</button>
+            <button type="button" class="pc-btn-ghost" id="pcFlyoutClose">Close</button>
           </div>
         </div>
       </div>
