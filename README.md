@@ -1,4 +1,4 @@
-# Muesli
+# Asymbl Recall Desktop
 
 This is a demo application that shows off what you can build with the [Recall.ai Desktop Recording SDK.](https://www.recall.ai/product/desktop-recording-sdk)
 
